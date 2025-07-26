@@ -26,6 +26,12 @@ pub struct BLSAG {
     key_image: RistrettoPoint,
 }
 
+impl BLSAG {
+    pub fn key_image(&self) -> RistrettoPoint {
+        self.key_image
+    }
+}
+
 impl KeyImageGen<Scalar, RistrettoPoint> for BLSAG {
     /// Some signature schemes require the key images to be signed as well.
     /// Use this method to generate them
