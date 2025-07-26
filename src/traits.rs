@@ -1,3 +1,4 @@
+use crate::error::SignatureError;
 use digest::{Digest, generic_array::typenum::U64};
 use rand_core::{CryptoRng, RngCore};
 
@@ -52,5 +53,7 @@ pub trait SignRef<Secret, Ring: ?Sized> {
         k: Secret,
         ring: &Ring,
         message: &[u8],
-    ) -> Self;
+    ) -> Result<Self, SignatureError>
+    where
+        Self: Sized;
 }

@@ -48,7 +48,7 @@ fn test_blsag_serde() {
     ring.insert(secret_index, k_point);
     let message: Vec<u8> = b"This is the message".iter().cloned().collect();
 
-    let signature = BLSAG::sign::<Sha512, OsRng>(k, &ring, &message);
+    let signature = BLSAG::sign::<Sha512, OsRng>(k, &ring, &message).unwrap();
 
     let serialized = serde_json::to_string(&signature).unwrap();
     let deserialized: BLSAG = serde_json::from_str(&serialized).unwrap();
