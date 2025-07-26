@@ -20,10 +20,10 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone)]
 pub struct BLSAG {
-    pub challenge: Scalar,
-    pub responses: Vec<Scalar>,
-    pub ring: Vec<RistrettoPoint>,
-    pub key_image: RistrettoPoint,
+    challenge: Scalar,
+    responses: Vec<Scalar>,
+    ring: Vec<RistrettoPoint>,
+    key_image: RistrettoPoint,
 }
 
 impl KeyImageGen<Scalar, RistrettoPoint> for BLSAG {
