@@ -1,3 +1,5 @@
+//! Back's Linkable Spontaneous Anonymous Group (bLSAG) signatures
+
 use crate::prelude::*;
 use crate::traits::{KeyImageGen, LinkRef, SignRef, VerifyRef};
 use curve25519_dalek::constants;
@@ -31,17 +33,50 @@ impl BLSAG {
     }
 }
 
+/// Private helper function to perform the core cryptographic hashing used in both
+/// signing and verification. This prevents code duplication.
+fn hash_ring_member_components<H: Digest<OutputSize = U64> + Clone + Default>(
+    message_hash: &H,
+    response: Scalar,
+    challenge: Scalar,
+    public_key: RistrettoPoint,
+    key_image: RistrettoPoint,
+) -> Scalar {
+    let mut h = message_hash.clone();
+    h.update(
+        RistrettoPoint::multiscalar_mul(
+            &[response, challenge],
+            &[constants::RISTRETTO_BASEPOINT_POINT, public_key],
+        )
+        .compress()
+        .as_bytes(),
+    );
+    h.update(
+        RistrettoPoint::multiscalar_mul(
+            &[response, challenge],
+            &[
+                RistrettoPoint::from_hash(
+                    H::default().chain_update(public_key.compress().as_bytes()),
+                ),
+                key_image,
+            ],
+        )
+        .compress()
+        .as_bytes(),
+    );
+    Scalar::from_hash(h)
+}
+
 impl KeyImageGen<Scalar, RistrettoPoint> for BLSAG {
     /// Some signature schemes require the key images to be signed as well.
     /// Use this method to generate them
-    fn generate_key_image<Hash: Digest<OutputSize = U64> + Clone + Default>(
+    fn generate_key_image<H: Digest<OutputSize = U64> + Clone + Default>(
         k: Scalar,
     ) -> RistrettoPoint {
         let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
 
-        let key_image: RistrettoPoint = k * RistrettoPoint::from_hash(
-            Hash::default().chain_update(k_point.compress().as_bytes()),
-        );
+        let key_image: RistrettoPoint =
+            k * RistrettoPoint::from_hash(H::default().chain_update(k_point.compress().as_bytes()));
 
         key_image
     }
@@ -51,7 +86,7 @@ impl SignRef<Scalar, [RistrettoPoint]> for BLSAG {
     /// To sign you need `k` your private key, and `ring` which is the public keys of everyone
     /// except you. You are signing the `message`
     fn sign<
-        Hash: Digest<OutputSize = U64> + Clone + Default,
+        H: Digest<OutputSize = U64> + Clone + Default,
         CSPRNG: CryptoRng + RngCore + Default,
     >(
         k: Scalar,
@@ -68,7 +103,7 @@ impl SignRef<Scalar, [RistrettoPoint]> for BLSAG {
             .position(|&r| r == k_point)
             .ok_or(SignatureError::SignerNotFound)?;
 
-        let key_image: RistrettoPoint = BLSAG::generate_key_image::<Hash>(k);
+        let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k);
 
         let n = ring.len();
 
@@ -79,51 +114,34 @@ impl SignRef<Scalar, [RistrettoPoint]> for BLSAG {
         let mut cs: Vec<Scalar> = (0..n).map(|_| Scalar::ZERO).collect();
 
         // Hash of message is shared by all challenges H_n(m, ....)
-        let mut message_hash = Hash::default();
-
+        let mut message_hash = H::default();
         message_hash.update(message);
 
-        let mut hashes: Vec<Hash> = (0..n).map(|_| message_hash.clone()).collect();
-
-        hashes[(secret_index + 1) % n].update(
+        let mut h = message_hash.clone();
+        h.update(
             (a * constants::RISTRETTO_BASEPOINT_POINT)
                 .compress()
                 .as_bytes(),
         );
-        hashes[(secret_index + 1) % n].update(
+        h.update(
             (a * RistrettoPoint::from_hash(
-                Hash::default().chain_update(k_point.compress().as_bytes()),
+                H::default().chain_update(k_point.compress().as_bytes()),
             ))
             .compress()
             .as_bytes(),
         );
-        cs[(secret_index + 1) % n] = Scalar::from_hash(hashes[(secret_index + 1) % n].clone());
+        cs[(secret_index + 1) % n] = Scalar::from_hash(h);
 
         let mut i = (secret_index + 1) % n;
 
         loop {
-            hashes[(i + 1) % n].update(
-                RistrettoPoint::multiscalar_mul(
-                    &[rs[i % n], cs[i % n]],
-                    &[constants::RISTRETTO_BASEPOINT_POINT, ring[i % n]],
-                )
-                .compress()
-                .as_bytes(),
+            cs[(i + 1) % n] = hash_ring_member_components(
+                &message_hash,
+                rs[i % n],
+                cs[i % n],
+                ring[i % n],
+                key_image,
             );
-            hashes[(i + 1) % n].update(
-                RistrettoPoint::multiscalar_mul(
-                    &[rs[i % n], cs[i % n]],
-                    &[
-                        RistrettoPoint::from_hash(
-                            Hash::default().chain_update(ring[i % n].compress().as_bytes()),
-                        ),
-                        key_image,
-                    ],
-                )
-                .compress()
-                .as_bytes(),
-            );
-            cs[(i + 1) % n] = Scalar::from_hash(hashes[(i + 1) % n].clone());
 
             if (secret_index >= 1 && i % n == (secret_index - 1) % n)
                 || (secret_index == 0 && i % n == n - 1)
@@ -146,38 +164,22 @@ impl SignRef<Scalar, [RistrettoPoint]> for BLSAG {
 
 impl VerifyRef<[RistrettoPoint]> for BLSAG {
     /// To verify a `signature` you need the `message` too
-    fn verify<Hash: Digest<OutputSize = U64> + Clone + Default>(
+    fn verify<H: Digest<OutputSize = U64> + Clone + Default>(
         signature: &BLSAG,
         ring: &[RistrettoPoint],
         message: &[u8],
     ) -> bool {
         let mut reconstructed_c: Scalar = signature.challenge;
-        for (j, ring_member) in ring.iter().enumerate() {
-            let mut h: Hash = Hash::default();
-            h.update(message);
-            h.update(
-                RistrettoPoint::multiscalar_mul(
-                    &[signature.responses[j], reconstructed_c],
-                    &[constants::RISTRETTO_BASEPOINT_POINT, *ring_member],
-                )
-                .compress()
-                .as_bytes(),
-            );
+        let message_hash = H::default().chain_update(message);
 
-            h.update(
-                RistrettoPoint::multiscalar_mul(
-                    &[signature.responses[j], reconstructed_c],
-                    &[
-                        RistrettoPoint::from_hash(
-                            Hash::default().chain_update(ring_member.compress().as_bytes()),
-                        ),
-                        signature.key_image,
-                    ],
-                )
-                .compress()
-                .as_bytes(),
+        for (j, ring_member) in ring.iter().enumerate() {
+            reconstructed_c = hash_ring_member_components(
+                &message_hash,
+                signature.responses[j],
+                reconstructed_c,
+                *ring_member,
+                signature.key_image,
             );
-            reconstructed_c = Scalar::from_hash(h);
         }
 
         signature.challenge == reconstructed_c
