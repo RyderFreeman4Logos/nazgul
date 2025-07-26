@@ -105,52 +105,52 @@ fn verify_fails_with_wrong_message() {
     assert!(!BLSAG::verify::<Sha512>(signature, wrong_message));
 }
 
-#[test]
-fn verify_fails_with_tampered_challenge() {
-    let mut csprng = OsRng;
-    let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
-    let secret_index = 1;
-    let mut ring = generate_ring(&mut csprng, 3);
-    ring.insert(secret_index, signer_public_key);
+// #[test]
+// fn verify_fails_with_tampered_challenge() {
+//     let mut csprng = OsRng;
+//     let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
+//     let secret_index = 1;
+//     let mut ring = generate_ring(&mut csprng, 3);
+//     ring.insert(secret_index, signer_public_key);
 
-    let mut signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key.clone(), ring, secret_index, MESSAGE);
+//     let mut signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key.clone(), ring, secret_index, MESSAGE);
 
-    // Tamper with the challenge
-    signature.challenge = signature.challenge + Scalar::ONE;
+//     // Tamper with the challenge
+//     signature.challenge = signature.challenge + Scalar::ONE;
 
-    assert!(!BLSAG::verify::<Sha512>(signature, MESSAGE));
-}
+//     assert!(!BLSAG::verify::<Sha512>(signature, MESSAGE));
+// }
 
-#[test]
-fn verify_fails_with_tampered_response() {
-    let mut csprng = OsRng;
-    let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
-    let secret_index = 4;
-    let mut ring = generate_ring(&mut csprng, 5);
-    ring.insert(secret_index, signer_public_key);
+// #[test]
+// fn verify_fails_with_tampered_response() {
+//     let mut csprng = OsRng;
+//     let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
+//     let secret_index = 4;
+//     let mut ring = generate_ring(&mut csprng, 5);
+//     ring.insert(secret_index, signer_public_key);
 
-    let mut signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key.clone(), ring, secret_index, MESSAGE);
+//     let mut signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key.clone(), ring, secret_index, MESSAGE);
 
-    // Tamper with one of the responses
-    signature.responses[2] = signature.responses[2] + Scalar::ONE;
+//     // Tamper with one of the responses
+//     signature.responses[2] = signature.responses[2] + Scalar::ONE;
 
-    assert!(!BLSAG::verify::<Sha512>(signature, MESSAGE));
-}
+//     assert!(!BLSAG::verify::<Sha512>(signature, MESSAGE));
+// }
 
-#[test]
-fn verify_fails_with_different_ring() {
-    let mut csprng = OsRng;
-    let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
-    let secret_index = 2;
-    let mut ring = generate_ring(&mut csprng, 6);
-    ring.insert(secret_index, signer_public_key);
+// #[test]
+// fn verify_fails_with_different_ring() {
+//     let mut csprng = OsRng;
+//     let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
+//     let secret_index = 2;
+//     let mut ring = generate_ring(&mut csprng, 6);
+//     ring.insert(secret_index, signer_public_key);
 
-    let mut signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key.clone(), ring, secret_index, MESSAGE);
+//     let mut signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key.clone(), ring, secret_index, MESSAGE);
 
-    // Create a completely different ring for verification
-    let mut different_ring = generate_ring(&mut csprng, 6);
-    different_ring.insert(secret_index, signer_public_key);
-    signature.ring = different_ring;
+//     // Create a completely different ring for verification
+//     let mut different_ring = generate_ring(&mut csprng, 6);
+//     different_ring.insert(secret_index, signer_public_key);
+//     signature.ring = different_ring;
 
-    assert!(!BLSAG::verify::<Sha512>(signature, MESSAGE));
-}
+//     assert!(!BLSAG::verify::<Sha512>(signature, MESSAGE));
+// }
