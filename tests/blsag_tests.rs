@@ -42,7 +42,7 @@ fn sign_and_verify_succeeds() {
     ring.insert(secret_index, signer_public_key);
 
     // We have to clone the private key because `sign` consumes it.
-    let signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key.clone(), &ring, MESSAGE);
+    let signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring, MESSAGE);
 
     assert!(BLSAG::verify::<Sha512>(&signature, &ring, MESSAGE));
 }
@@ -62,8 +62,8 @@ fn link_succeeds_for_same_signer() {
 
     let message2: &[u8] = b"A different message for the second signature.";
 
-    let signature1 = BLSAG::sign::<Sha512, OsRng>(signer_private_key.clone(), &ring1, MESSAGE);
-    let signature2 = BLSAG::sign::<Sha512, OsRng>(signer_private_key.clone(), &ring2, message2);
+    let signature1 = BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring1, MESSAGE);
+    let signature2 = BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring2, message2);
 
     assert!(BLSAG::link(&signature1, &signature2));
 }
@@ -76,13 +76,13 @@ fn link_fails_for_different_signers() {
     let (private_key1, public_key1) = generate_keypair(&mut csprng);
     let mut ring1 = generate_ring(&mut csprng, 5);
     ring1.insert(1, public_key1);
-    let signature1 = BLSAG::sign::<Sha512, OsRng>(private_key1.clone(), &ring1, MESSAGE);
+    let signature1 = BLSAG::sign::<Sha512, OsRng>(private_key1, &ring1, MESSAGE);
 
     // Signer 2
     let (private_key2, public_key2) = generate_keypair(&mut csprng);
     let mut ring2 = generate_ring(&mut csprng, 5);
     ring2.insert(4, public_key2);
-    let signature2 = BLSAG::sign::<Sha512, OsRng>(private_key2.clone(), &ring2, MESSAGE);
+    let signature2 = BLSAG::sign::<Sha512, OsRng>(private_key2, &ring2, MESSAGE);
 
     assert!(!BLSAG::link(&signature1, &signature2));
 }
@@ -99,7 +99,7 @@ fn verify_fails_with_wrong_message() {
     let mut ring = generate_ring(&mut csprng, 7);
     ring.insert(secret_index, signer_public_key);
 
-    let signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key.clone(), &ring, MESSAGE);
+    let signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring, MESSAGE);
 
     let wrong_message: &[u8] = b"This is not the message you are looking for.";
     assert!(!BLSAG::verify::<Sha512>(&signature, &ring, wrong_message));

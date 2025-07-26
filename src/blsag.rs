@@ -152,14 +152,13 @@ impl VerifyRef<[RistrettoPoint]> for BLSAG {
         message: &[u8],
     ) -> bool {
         let mut reconstructed_c: Scalar = signature.challenge;
-        let n = ring.len();
-        for j in 0..n {
+        for (j, ring_member) in ring.iter().enumerate() {
             let mut h: Hash = Hash::default();
             h.update(message);
             h.update(
                 RistrettoPoint::multiscalar_mul(
                     &[signature.responses[j], reconstructed_c],
-                    &[constants::RISTRETTO_BASEPOINT_POINT, ring[j]],
+                    &[constants::RISTRETTO_BASEPOINT_POINT, *ring_member],
                 )
                 .compress()
                 .as_bytes(),
@@ -170,7 +169,7 @@ impl VerifyRef<[RistrettoPoint]> for BLSAG {
                     &[signature.responses[j], reconstructed_c],
                     &[
                         RistrettoPoint::from_hash(
-                            Hash::default().chain_update(ring[j].compress().as_bytes()),
+                            Hash::default().chain_update(ring_member.compress().as_bytes()),
                         ),
                         signature.key_image,
                     ],
