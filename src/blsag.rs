@@ -187,7 +187,7 @@ impl Verify for BLSAG {
 impl Link for BLSAG {
     /// This is for linking two signatures and checking if they are signed by the same person
     fn link(signature_1: BLSAG, signature_2: BLSAG) -> bool {
-        signature_1.key_image == signature_2.key_image
+        signature_1.key_image() == signature_2.key_image()
     }
 }
 
