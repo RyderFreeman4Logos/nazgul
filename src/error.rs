@@ -11,7 +11,9 @@ pub enum SignatureError {
 impl core::fmt::Display for SignatureError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            SignatureError::SignerNotFound => write!(f, "The signer's public key was not found in the ring"),
+            SignatureError::SignerNotFound => {
+                write!(f, "The signer's public key was not found in the ring")
+            }
         }
     }
 }

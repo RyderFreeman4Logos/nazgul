@@ -4,7 +4,7 @@ use nazgul::traits::{LinkRef, SignRef, VerifyRef};
 
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
-use rand_core::{CryptoRng, RngCore, OsRng};
+use rand_core::{CryptoRng, OsRng, RngCore};
 use sha2::Sha512;
 
 // ==============
@@ -133,8 +133,9 @@ fn verify_succeeds_for_every_ring_member() {
     let num_members = 5;
 
     // Create a set of keypairs for the ring members.
-    let keypairs: Vec<(Scalar, RistrettoPoint)> =
-        (0..num_members).map(|_| generate_keypair(&mut csprng)).collect();
+    let keypairs: Vec<(Scalar, RistrettoPoint)> = (0..num_members)
+        .map(|_| generate_keypair(&mut csprng))
+        .collect();
 
     let ring: Vec<RistrettoPoint> = keypairs.iter().map(|(_, public_key)| *public_key).collect();
 

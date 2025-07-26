@@ -216,9 +216,10 @@ mod test {
         let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
         let secret_index = 1;
         let n = 2;
-        let mut ring: Vec<RistrettoPoint> = (0..(n - 1)) // Prover is going to add our key into this mix
-            .map(|_| RistrettoPoint::random(&mut csprng))
-            .collect();
+        let mut ring: Vec<RistrettoPoint> =
+            (0..(n - 1)) // Prover is going to add our key into this mix
+                .map(|_| RistrettoPoint::random(&mut csprng))
+                .collect();
         ring.insert(secret_index, k_point);
         let message: Vec<u8> = b"This is the message".iter().cloned().collect();
 
@@ -229,15 +230,13 @@ mod test {
         }
 
         {
-            let signature =
-                BLSAG::sign::<Keccak512, OsRng>(k, &ring, &message).unwrap();
+            let signature = BLSAG::sign::<Keccak512, OsRng>(k, &ring, &message).unwrap();
             let result = BLSAG::verify::<Keccak512>(&signature, &ring, &message);
             assert!(result);
         }
 
         {
-            let signature =
-                BLSAG::sign::<Blake2b512, OsRng>(k, &ring, &message).unwrap();
+            let signature = BLSAG::sign::<Blake2b512, OsRng>(k, &ring, &message).unwrap();
             let result = BLSAG::verify::<Blake2b512>(&signature, &ring, &message);
             assert!(result);
         }
@@ -248,12 +247,8 @@ mod test {
                 .collect();
         another_ring.insert(secret_index, k_point);
         let another_message: Vec<u8> = b"This is another message".iter().cloned().collect();
-        let signature_1 = BLSAG::sign::<Blake2b512, OsRng>(
-            k,
-            &another_ring,
-            &another_message,
-        )
-        .unwrap();
+        let signature_1 =
+            BLSAG::sign::<Blake2b512, OsRng>(k, &another_ring, &another_message).unwrap();
         let signature_2 = BLSAG::sign::<Blake2b512, OsRng>(k, &ring, &message).unwrap();
         let result = BLSAG::link(&signature_1, &signature_2);
         assert!(result);

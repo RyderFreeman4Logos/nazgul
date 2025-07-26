@@ -1,5 +1,5 @@
 use crate::error::SignatureError;
-use digest::{Digest, generic_array::typenum::U64};
+use digest::{generic_array::typenum::U64, Digest};
 use rand_core::{CryptoRng, RngCore};
 
 pub trait KeyImageGen<Secret, Point> {
@@ -7,7 +7,10 @@ pub trait KeyImageGen<Secret, Point> {
 }
 
 pub trait Sign<Secret, Ring> {
-    fn sign<Hash: Digest<OutputSize = U64> + Clone + Default, CSPRNG: CryptoRng + RngCore + Default>(
+    fn sign<
+        Hash: Digest<OutputSize = U64> + Clone + Default,
+        CSPRNG: CryptoRng + RngCore + Default,
+    >(
         k: Secret,
         ring: Ring,
         secret_index: usize,
@@ -49,7 +52,10 @@ pub trait LinkRef {
 }
 
 pub trait SignRef<Secret, Ring: ?Sized> {
-    fn sign<Hash: Digest<OutputSize = U64> + Clone + Default, CSPRNG: CryptoRng + RngCore + Default>(
+    fn sign<
+        Hash: Digest<OutputSize = U64> + Clone + Default,
+        CSPRNG: CryptoRng + RngCore + Default,
+    >(
         k: Secret,
         ring: &Ring,
         message: &[u8],
