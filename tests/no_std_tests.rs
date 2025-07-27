@@ -8,6 +8,7 @@ use nazgul::blsag::BLSAG;
 use nazgul::clsag::CLSAG;
 use nazgul::mlsag::MLSAG;
 use nazgul::sag::SAG;
+use nazgul::ring::Ring;
 use nazgul::traits::{Link, LinkRef, Sign, SignRef, Verify, VerifyRef};
 
 use curve25519_dalek::ristretto::RistrettoPoint;
@@ -36,12 +37,12 @@ fn test_blsag_no_std() {
     let mut csprng = OsRng;
     let k: Scalar = Scalar::random(&mut csprng);
     let k_point: RistrettoPoint = k * curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
-    let secret_index = 1;
     let n = 2;
-    let mut ring: Vec<RistrettoPoint> = (0..(n - 1))
+    let mut public_keys: Vec<RistrettoPoint> = (0..(n - 1))
         .map(|_| RistrettoPoint::random(&mut csprng))
         .collect();
-    ring.insert(secret_index, k_point);
+    public_keys.push(k_point);
+    let ring = Ring::new(public_keys);
     let message: Vec<u8> = b"This is the message".iter().cloned().collect();
 
     let signature = BLSAG::sign::<Sha512, OsRng>(k, &ring, &message).unwrap();

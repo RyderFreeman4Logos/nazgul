@@ -82,7 +82,7 @@ impl KeyImageGen<Scalar, RistrettoPoint> for BLSAG {
     }
 }
 
-impl SignRef<Scalar, [RistrettoPoint]> for BLSAG {
+impl SignRef<Scalar> for BLSAG {
     /// To sign you need `k` your private key, and `ring` which is the public keys of everyone
     /// except you. You are signing the `message`
     fn sign<
@@ -90,22 +90,24 @@ impl SignRef<Scalar, [RistrettoPoint]> for BLSAG {
         CSPRNG: CryptoRng + RngCore + Default,
     >(
         k: Scalar,
-        ring: &[RistrettoPoint],
+        ring: &Ring,
         message: &[u8],
     ) -> Result<BLSAG, SignatureError> {
         let mut csprng = CSPRNG::default();
+        let ring_members = ring.members();
 
         // Provers public key
         let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
 
-        let secret_index = ring
-            .iter()
-            .position(|&r| r == k_point)
-            .ok_or(SignatureError::SignerNotFound)?;
+        let secret_index = ring_members
+            .binary_search_by_key(&k_point.compress().to_bytes(), |p| {
+                p.compress().to_bytes()
+            })
+            .map_err(|_| SignatureError::SignerNotFound)?;
 
         let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k);
 
-        let n = ring.len();
+        let n = ring_members.len();
 
         let a: Scalar = Scalar::random(&mut csprng);
 
@@ -139,7 +141,7 @@ impl SignRef<Scalar, [RistrettoPoint]> for BLSAG {
                 &message_hash,
                 rs[i % n],
                 cs[i % n],
-                ring[i % n],
+                ring_members[i % n],
                 key_image,
             );
 
@@ -162,17 +164,18 @@ impl SignRef<Scalar, [RistrettoPoint]> for BLSAG {
     }
 }
 
-impl VerifyRef<[RistrettoPoint]> for BLSAG {
+impl VerifyRef for BLSAG {
     /// To verify a `signature` you need the `message` too
     fn verify<H: Digest<OutputSize = U64> + Clone + Default>(
         signature: &BLSAG,
-        ring: &[RistrettoPoint],
+        ring: &Ring,
         message: &[u8],
     ) -> bool {
         let mut reconstructed_c: Scalar = signature.challenge;
         let message_hash = H::default().chain_update(message);
+        let ring_members = ring.members();
 
-        for (j, ring_member) in ring.iter().enumerate() {
+        for (j, ring_member) in ring_members.iter().enumerate() {
             reconstructed_c = hash_ring_member_components(
                 &message_hash,
                 signature.responses[j],
@@ -214,13 +217,12 @@ mod test {
         let mut csprng = OsRng::default();
         let k: Scalar = Scalar::random(&mut csprng);
         let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
-        let secret_index = 1;
         let n = 2;
-        let mut ring: Vec<RistrettoPoint> =
-            (0..(n - 1)) // Prover is going to add our key into this mix
-                .map(|_| RistrettoPoint::random(&mut csprng))
-                .collect();
-        ring.insert(secret_index, k_point);
+        let mut public_keys: Vec<RistrettoPoint> = (0..(n - 1))
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        public_keys.push(k_point);
+        let ring = Ring::new(public_keys);
         let message: Vec<u8> = b"This is the message".iter().cloned().collect();
 
         {
@@ -230,25 +232,32 @@ mod test {
         }
 
         {
-            let signature = BLSAG::sign::<Keccak512, OsRng>(k, &ring, &message).unwrap();
+            let signature =
+                BLSAG::sign::<Keccak512, OsRng>(k, &ring, &message).unwrap();
             let result = BLSAG::verify::<Keccak512>(&signature, &ring, &message);
             assert!(result);
         }
 
         {
-            let signature = BLSAG::sign::<Blake2b512, OsRng>(k, &ring, &message).unwrap();
+            let signature =
+                BLSAG::sign::<Blake2b512, OsRng>(k, &ring, &message).unwrap();
             let result = BLSAG::verify::<Blake2b512>(&signature, &ring, &message);
             assert!(result);
         }
 
-        let mut another_ring: Vec<RistrettoPoint> =
-            (0..(n - 1)) // Prover is going to add our key into this mix
+        let mut another_public_keys: Vec<RistrettoPoint> =
+            (0..(n - 1)) 
                 .map(|_| RistrettoPoint::random(&mut csprng))
                 .collect();
-        another_ring.insert(secret_index, k_point);
+        another_public_keys.push(k_point);
+        let another_ring = Ring::new(another_public_keys);
         let another_message: Vec<u8> = b"This is another message".iter().cloned().collect();
-        let signature_1 =
-            BLSAG::sign::<Blake2b512, OsRng>(k, &another_ring, &another_message).unwrap();
+        let signature_1 = BLSAG::sign::<Blake2b512, OsRng>(
+            k,
+            &another_ring,
+            &another_message,
+        )
+        .unwrap();
         let signature_2 = BLSAG::sign::<Blake2b512, OsRng>(k, &ring, &message).unwrap();
         let result = BLSAG::link(&signature_1, &signature_2);
         assert!(result);

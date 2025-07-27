@@ -1,4 +1,5 @@
 use crate::error::SignatureError;
+use crate::ring::Ring;
 use digest::{generic_array::typenum::U64, Digest};
 use rand_core::{CryptoRng, RngCore};
 
@@ -35,7 +36,7 @@ pub trait Link {
 // Traits for passing by reference, intended for gradual adoption.
 // ================================================================================================
 
-pub trait VerifyRef<Ring: ?Sized> {
+pub trait VerifyRef {
     /// To verify a `signature` you need the `message` too. This trait passes the signature
     /// by reference.
     fn verify<Hash: Digest<OutputSize = U64> + Clone + Default>(
@@ -51,7 +52,7 @@ pub trait LinkRef {
     fn link(signature_1: &Self, signature_2: &Self) -> bool;
 }
 
-pub trait SignRef<Secret, Ring: ?Sized> {
+pub trait SignRef<Secret> {
     fn sign<
         Hash: Digest<OutputSize = U64> + Clone + Default,
         CSPRNG: CryptoRng + RngCore + Default,

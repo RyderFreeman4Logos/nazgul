@@ -38,5 +38,6 @@ pub mod clsag;
 pub mod error;
 pub mod mlsag;
 pub(crate) mod prelude;
+pub mod ring;
 pub mod sag;
 pub mod traits;

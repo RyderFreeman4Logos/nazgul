@@ -1,5 +1,6 @@
 use nazgul::blsag::BLSAG;
 use nazgul::error::SignatureError;
+use nazgul::ring::Ring;
 use nazgul::traits::{LinkRef, SignRef, VerifyRef};
 
 use curve25519_dalek::ristretto::RistrettoPoint;
@@ -38,8 +39,9 @@ fn sign_and_verify_succeeds() {
     let secret_index = 3;
     let num_decoys = 10;
 
-    let mut ring = generate_ring(&mut csprng, num_decoys);
-    ring.insert(secret_index, signer_public_key);
+    let mut public_keys = generate_ring(&mut csprng, num_decoys);
+    public_keys.push(signer_public_key);
+    let ring = Ring::new(public_keys);
 
     let signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring, MESSAGE).unwrap();
 
@@ -50,14 +52,15 @@ fn sign_and_verify_succeeds() {
 fn link_succeeds_for_same_signer() {
     let mut csprng = OsRng;
     let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
-    let secret_index = 2;
     let num_decoys = 4;
 
-    let mut ring1 = generate_ring(&mut csprng, num_decoys);
-    ring1.insert(secret_index, signer_public_key);
+    let mut public_keys1 = generate_ring(&mut csprng, num_decoys);
+    public_keys1.push(signer_public_key);
+    let ring1 = Ring::new(public_keys1);
 
-    let mut ring2 = generate_ring(&mut csprng, num_decoys);
-    ring2.insert(secret_index, signer_public_key);
+    let mut public_keys2 = generate_ring(&mut csprng, num_decoys);
+    public_keys2.push(signer_public_key);
+    let ring2 = Ring::new(public_keys2);
 
     let message2: &[u8] = b"A different message for the second signature.";
 
@@ -73,14 +76,16 @@ fn link_fails_for_different_signers() {
 
     // Signer 1
     let (private_key1, public_key1) = generate_keypair(&mut csprng);
-    let mut ring1 = generate_ring(&mut csprng, 5);
-    ring1.insert(1, public_key1);
+    let mut public_keys1 = generate_ring(&mut csprng, 5);
+    public_keys1.push(public_key1);
+    let ring1 = Ring::new(public_keys1);
     let signature1 = BLSAG::sign::<Sha512, OsRng>(private_key1, &ring1, MESSAGE).unwrap();
 
     // Signer 2
     let (private_key2, public_key2) = generate_keypair(&mut csprng);
-    let mut ring2 = generate_ring(&mut csprng, 5);
-    ring2.insert(4, public_key2);
+    let mut public_keys2 = generate_ring(&mut csprng, 5);
+    public_keys2.push(public_key2);
+    let ring2 = Ring::new(public_keys2);
     let signature2 = BLSAG::sign::<Sha512, OsRng>(private_key2, &ring2, MESSAGE).unwrap();
 
     assert!(!BLSAG::link(&signature1, &signature2));
@@ -94,9 +99,11 @@ fn link_fails_for_different_signers() {
 fn verify_fails_with_wrong_message() {
     let mut csprng = OsRng;
     let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
-    let secret_index = 0;
-    let mut ring = generate_ring(&mut csprng, 7);
-    ring.insert(secret_index, signer_public_key);
+    let num_decoys = 7;
+
+    let mut public_keys = generate_ring(&mut csprng, num_decoys);
+    public_keys.push(signer_public_key);
+    let ring = Ring::new(public_keys);
 
     let signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring, MESSAGE).unwrap();
 
@@ -117,7 +124,8 @@ fn sign_fails_if_signer_not_in_ring() {
     let num_decoys = 10;
 
     // The ring is composed entirely of decoys; the attacker's public key is not included.
-    let ring = generate_ring(&mut csprng, num_decoys);
+    let decoys = generate_ring(&mut csprng, num_decoys);
+    let ring = Ring::new(decoys);
 
     // This call should fail because the public key corresponding to the private key
     // is not present in the ring.
@@ -137,7 +145,8 @@ fn verify_succeeds_for_every_ring_member() {
         .map(|_| generate_keypair(&mut csprng))
         .collect();
 
-    let ring: Vec<RistrettoPoint> = keypairs.iter().map(|(_, public_key)| *public_key).collect();
+    let public_keys: Vec<RistrettoPoint> = keypairs.iter().map(|(_, public_key)| *public_key).collect();
+    let ring = Ring::new(public_keys);
 
     // Iterate through each member, have them sign, and verify the signature.
     for (signer_private_key, _) in keypairs.iter() {
@@ -157,11 +166,13 @@ fn link_succeeds_for_same_signer_with_different_rings() {
     let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
 
     // Create two different rings, but both contain the signer's public key.
-    let mut ring1 = generate_ring(&mut csprng, 7);
-    ring1.insert(3, signer_public_key);
+    let mut public_keys1 = generate_ring(&mut csprng, 7);
+    public_keys1.push(signer_public_key);
+    let ring1 = Ring::new(public_keys1);
 
-    let mut ring2 = generate_ring(&mut csprng, 10);
-    ring2.insert(8, signer_public_key);
+    let mut public_keys2 = generate_ring(&mut csprng, 10);
+    public_keys2.push(signer_public_key);
+    let ring2 = Ring::new(public_keys2);
 
     let message1: &[u8] = b"First message.";
     let message2: &[u8] = b"Second message.";
