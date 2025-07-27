@@ -1,9 +1,9 @@
 use criterion::{criterion_group, criterion_main, Criterion};
+use curve25519_dalek::ristretto::RistrettoPoint;
+use curve25519_dalek::scalar::Scalar;
 use nazgul::blsag::BLSAG;
 use nazgul::ring::Ring;
 use nazgul::traits::SignRef;
-use curve25519_dalek::ristretto::RistrettoPoint;
-use curve25519_dalek::scalar::Scalar;
 use rand_core::OsRng;
 use sha2::Sha512;
 use std::time::Duration;
@@ -12,12 +12,13 @@ use std::time::Duration;
 fn setup_ring(num_decoys: usize) -> (Scalar, Ring) {
     let mut csprng = OsRng;
     let signer_private_key = Scalar::random(&mut csprng);
-    let signer_public_key = signer_private_key * curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
+    let signer_public_key =
+        signer_private_key * curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
 
     let mut public_keys: Vec<RistrettoPoint> = (0..num_decoys)
         .map(|_| RistrettoPoint::random(&mut csprng))
         .collect();
-    
+
     public_keys.push(signer_public_key);
     let ring = Ring::new(public_keys);
 
@@ -36,9 +37,7 @@ fn blsag_sign_benchmark(c: &mut Criterion) {
     group.sample_size(10);
 
     group.bench_with_input("No Precomputation", &ring, |b, r| {
-        b.iter(|| {
-            BLSAG::sign::<Sha512, OsRng>(private_key, r, None, message).unwrap()
-        });
+        b.iter(|| BLSAG::sign::<Sha512, OsRng>(private_key, r, None, message).unwrap());
     });
 
     group.bench_with_input("With Precomputation", &ring, |b, r| {

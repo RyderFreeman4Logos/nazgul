@@ -7,8 +7,8 @@ use alloc::vec::Vec;
 use nazgul::blsag::BLSAG;
 use nazgul::clsag::CLSAG;
 use nazgul::mlsag::MLSAG;
-use nazgul::sag::SAG;
 use nazgul::ring::Ring;
+use nazgul::sag::SAG;
 use nazgul::traits::{Link, LinkRef, Sign, SignRef, Verify, VerifyRef};
 
 use curve25519_dalek::ristretto::RistrettoPoint;

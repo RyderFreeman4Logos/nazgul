@@ -1,5 +1,5 @@
 use crate::error::SignatureError;
-use crate::ring::{Ring, PrecomputedRingData};
+use crate::ring::{PrecomputedRingData, Ring};
 use digest::{generic_array::typenum::U64, Digest};
 use rand_core::{CryptoRng, RngCore};
 

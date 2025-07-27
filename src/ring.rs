@@ -2,7 +2,7 @@
 
 use crate::prelude::*;
 use curve25519_dalek::ristretto::RistrettoPoint;
-use digest::{Digest, generic_array::typenum::U64};
+use digest::{generic_array::typenum::U64, Digest};
 
 /// Represents pre-computed data for a `Ring` to accelerate cryptographic operations.
 ///
@@ -36,7 +36,7 @@ impl PrecomputedRingData {
             .iter()
             .map(|p| RistrettoPoint::from_hash(H::default().chain_update(p.compress().to_bytes())))
             .collect();
-        
+
         self.hashed_points == expected_points
     }
 }

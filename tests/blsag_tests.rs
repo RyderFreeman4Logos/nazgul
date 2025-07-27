@@ -63,8 +63,10 @@ fn link_succeeds_for_same_signer() {
 
     let message2: &[u8] = b"A different message for the second signature.";
 
-    let signature1 = BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring1, None, MESSAGE).unwrap();
-    let signature2 = BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring2, None, message2).unwrap();
+    let signature1 =
+        BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring1, None, MESSAGE).unwrap();
+    let signature2 =
+        BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring2, None, message2).unwrap();
 
     assert!(BLSAG::link(&signature1, &signature2));
 }
@@ -107,7 +109,12 @@ fn verify_fails_with_wrong_message() {
     let signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring, None, MESSAGE).unwrap();
 
     let wrong_message: &[u8] = b"This is not the message you are looking for.";
-    assert!(!BLSAG::verify::<Sha512>(&signature, &ring, None, wrong_message));
+    assert!(!BLSAG::verify::<Sha512>(
+        &signature,
+        &ring,
+        None,
+        wrong_message
+    ));
 }
 
 // ==============
@@ -144,12 +151,14 @@ fn verify_succeeds_for_every_ring_member() {
         .map(|_| generate_keypair(&mut csprng))
         .collect();
 
-    let public_keys: Vec<RistrettoPoint> = keypairs.iter().map(|(_, public_key)| *public_key).collect();
+    let public_keys: Vec<RistrettoPoint> =
+        keypairs.iter().map(|(_, public_key)| *public_key).collect();
     let ring = Ring::new(public_keys);
 
     // Iterate through each member, have them sign, and verify the signature.
     for (signer_private_key, _) in keypairs.iter() {
-        let signature = BLSAG::sign::<Sha512, OsRng>(*signer_private_key, &ring, None, MESSAGE).unwrap();
+        let signature =
+            BLSAG::sign::<Sha512, OsRng>(*signer_private_key, &ring, None, MESSAGE).unwrap();
         assert!(
             BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE),
             "Verification failed for a valid signer from the ring"
@@ -176,8 +185,10 @@ fn link_succeeds_for_same_signer_with_different_rings() {
     let message1: &[u8] = b"First message.";
     let message2: &[u8] = b"Second message.";
 
-    let signature1 = BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring1, None, message1).unwrap();
-    let signature2 = BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring2, None, message2).unwrap();
+    let signature1 =
+        BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring1, None, message1).unwrap();
+    let signature2 =
+        BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring2, None, message2).unwrap();
 
     assert!(
         BLSAG::link(&signature1, &signature2),
@@ -250,7 +261,9 @@ fn sign_and_verify_with_precomputation_succeeds() {
     assert!(precomputed_data.verify::<Sha512>(&ring));
 
     // 2. Sign using the precomputed data
-    let signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring, Some(&precomputed_data), MESSAGE).unwrap();
+    let signature =
+        BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring, Some(&precomputed_data), MESSAGE)
+            .unwrap();
 
     // 3. Verify the signature using the precomputed data
     assert!(

@@ -100,9 +100,7 @@ impl SignRef<Scalar> for BLSAG {
         let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
 
         let secret_index = ring_members
-            .binary_search_by_key(&k_point.compress().to_bytes(), |p| {
-                p.compress().to_bytes()
-            })
+            .binary_search_by_key(&k_point.compress().to_bytes(), |p| p.compress().to_bytes())
             .map_err(|_| SignatureError::SignerNotFound)?;
 
         let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k);
@@ -235,33 +233,25 @@ mod test {
         }
 
         {
-            let signature =
-                BLSAG::sign::<Keccak512, OsRng>(k, &ring, None, &message).unwrap();
+            let signature = BLSAG::sign::<Keccak512, OsRng>(k, &ring, None, &message).unwrap();
             let result = BLSAG::verify::<Keccak512>(&signature, &ring, None, &message);
             assert!(result);
         }
 
         {
-            let signature =
-                BLSAG::sign::<Blake2b512, OsRng>(k, &ring, None, &message).unwrap();
+            let signature = BLSAG::sign::<Blake2b512, OsRng>(k, &ring, None, &message).unwrap();
             let result = BLSAG::verify::<Blake2b512>(&signature, &ring, None, &message);
             assert!(result);
         }
 
-        let mut another_public_keys: Vec<RistrettoPoint> =
-            (0..(n - 1)) 
-                .map(|_| RistrettoPoint::random(&mut csprng))
-                .collect();
+        let mut another_public_keys: Vec<RistrettoPoint> = (0..(n - 1))
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
         another_public_keys.push(k_point);
         let another_ring = Ring::new(another_public_keys);
         let another_message: Vec<u8> = b"This is another message".iter().cloned().collect();
-        let signature_1 = BLSAG::sign::<Blake2b512, OsRng>(
-            k,
-            &another_ring,
-            None,
-            &another_message,
-        )
-        .unwrap();
+        let signature_1 =
+            BLSAG::sign::<Blake2b512, OsRng>(k, &another_ring, None, &another_message).unwrap();
         let signature_2 = BLSAG::sign::<Blake2b512, OsRng>(k, &ring, None, &message).unwrap();
         let result = BLSAG::link(&signature_1, &signature_2);
         assert!(result);
