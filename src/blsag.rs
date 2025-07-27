@@ -6,7 +6,7 @@ use crate::traits::{KeyImageGen, LinkRef, SignRef, VerifyRef};
 use curve25519_dalek::constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
-use curve25519_dalek::traits::MultiscalarMul;
+use curve25519_dalek::traits::VartimeMultiscalarMul;
 use digest::generic_array::typenum::U64;
 use digest::Digest;
 use rand_core::{CryptoRng, RngCore};
@@ -46,7 +46,7 @@ fn hash_ring_member_components<H: Digest<OutputSize = U64> + Clone + Default>(
 ) -> Scalar {
     let mut h = message_hash.clone();
     h.update(
-        RistrettoPoint::multiscalar_mul(
+        RistrettoPoint::vartime_multiscalar_mul(
             &[response, challenge],
             &[constants::RISTRETTO_BASEPOINT_POINT, public_key],
         )
@@ -59,7 +59,7 @@ fn hash_ring_member_components<H: Digest<OutputSize = U64> + Clone + Default>(
     });
 
     h.update(
-        RistrettoPoint::multiscalar_mul(&[response, challenge], &[pk_hash, key_image])
+        RistrettoPoint::vartime_multiscalar_mul(&[response, challenge], &[pk_hash, key_image])
             .compress()
             .as_bytes(),
     );
