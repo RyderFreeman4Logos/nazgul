@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, Criterion};
 use nazgul::blsag::BLSAG;
 use nazgul::ring::Ring;
 use nazgul::traits::SignRef;
@@ -28,33 +28,25 @@ fn blsag_sign_benchmark(c: &mut Criterion) {
     let message: &[u8] = b"This is a benchmark message.";
     let ring_size: usize = 2_000;
 
-    // === Warmed-up Benchmark (Standard) ===
-    let mut group = c.benchmark_group("BLSAG Signing (Warmed-up)");
-    group.measurement_time(Duration::from_secs(20)); // Allow enough time for measurement
-
     let (private_key, ring) = setup_ring(ring_size - 1);
-    group.bench_with_input(BenchmarkId::from_parameter(ring_size), &ring, |b, r| {
+    let precomputed_data = ring.precompute::<Sha512>();
+
+    let mut group = c.benchmark_group("BLSAG Signing");
+    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(10);
+
+    group.bench_with_input("No Precomputation", &ring, |b, r| {
         b.iter(|| {
-            BLSAG::sign::<Sha512, OsRng>(private_key, r, message).unwrap()
+            BLSAG::sign::<Sha512, OsRng>(private_key, r, None, message).unwrap()
         });
     });
-    group.finish();
 
-    // === Cold Start Benchmark (No/Minimal Warm-up) ===
-    let mut group = c.benchmark_group("BLSAG Signing (Cold Start)");
-    group.warm_up_time(Duration::from_millis(100)); // Minimal warm-up
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(10); // The minimum sample size
-
-    // We must re-run the setup inside the benchmark definition for a true cold start measurement
-    group.bench_function(BenchmarkId::from_parameter(ring_size), |b| {
-        b.iter_with_setup(
-            || setup_ring(ring_size - 1),
-            |(private_key, ring)| {
-                BLSAG::sign::<Sha512, OsRng>(private_key, &ring, message).unwrap()
-            }
-        );
+    group.bench_with_input("With Precomputation", &ring, |b, r| {
+        b.iter(|| {
+            BLSAG::sign::<Sha512, OsRng>(private_key, r, Some(&precomputed_data), message).unwrap()
+        });
     });
+
     group.finish();
 }
 

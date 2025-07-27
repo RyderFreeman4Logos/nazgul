@@ -8,4 +8,3 @@ pub use alloc::vec::Vec;
 pub use std::vec::Vec;
 
 pub use crate::error::SignatureError;
-pub use crate::ring::Ring;

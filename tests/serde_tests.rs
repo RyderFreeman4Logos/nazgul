@@ -49,12 +49,12 @@ fn test_blsag_serde() {
     let ring = Ring::new(public_keys);
     let message: Vec<u8> = b"This is the message".iter().cloned().collect();
 
-    let signature = BLSAG::sign::<Sha512, OsRng>(k, &ring, &message).unwrap();
+    let signature = BLSAG::sign::<Sha512, OsRng>(k, &ring, None, &message).unwrap();
 
     let serialized = serde_json::to_string(&signature).unwrap();
     let deserialized: BLSAG = serde_json::from_str(&serialized).unwrap();
 
-    let result = BLSAG::verify::<Sha512>(&deserialized, &ring, &message);
+    let result = BLSAG::verify::<Sha512>(&deserialized, &ring, None, &message);
     assert!(result);
 }
 

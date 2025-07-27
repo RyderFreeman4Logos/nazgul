@@ -1,5 +1,5 @@
 use crate::error::SignatureError;
-use crate::ring::Ring;
+use crate::ring::{Ring, PrecomputedRingData};
 use digest::{generic_array::typenum::U64, Digest};
 use rand_core::{CryptoRng, RngCore};
 
@@ -42,6 +42,7 @@ pub trait VerifyRef {
     fn verify<Hash: Digest<OutputSize = U64> + Clone + Default>(
         signature: &Self,
         ring: &Ring,
+        precomputed_data: Option<&PrecomputedRingData>,
         message: &[u8],
     ) -> bool;
 }
@@ -59,6 +60,7 @@ pub trait SignRef<Secret> {
     >(
         k: Secret,
         ring: &Ring,
+        precomputed_data: Option<&PrecomputedRingData>,
         message: &[u8],
     ) -> Result<Self, SignatureError>
     where
