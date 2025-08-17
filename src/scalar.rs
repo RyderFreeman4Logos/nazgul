@@ -56,3 +56,35 @@ impl LocalByteConvertible for RistrettoPoint {
         Self::from_bytes(&bytes)
     }
 }
+
+impl LocalByteConvertible for Scalar {
+    fn to_bytes(&self) -> [u8; 32] {
+        self.to_bytes()
+    }
+
+    fn from_bytes(bytes: &[u8]) -> AResult<Self>
+    where
+        Self: Sized,
+    {
+        let bytes_array: [u8; 32] = bytes.try_into().map_err(|_| {
+            anyhow!(
+                "Invalid byte length for Scalar, expected 32, got {}",
+                bytes.len()
+            )
+        })?;
+        Scalar::from_canonical_bytes(bytes_array)
+            .ok_or_else(|| anyhow!("Bytes do not represent a canonical Scalar"))
+    }
+
+    fn to_base58(&self) -> String {
+        bs58::encode(self.to_bytes()).into_string()
+    }
+
+    fn from_base58(input: String) -> AResult<Self>
+    where
+        Self: Sized,
+    {
+        let bytes = bs58::decode(input).into_vec()?;
+        Self::from_bytes(&bytes)
+    }
+}
