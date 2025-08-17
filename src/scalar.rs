@@ -42,9 +42,9 @@ impl LocalByteConvertible for RistrettoPoint {
     fn from_bytes(bytes: &[u8]) -> AResult<Self> {
         let compressed = CompressedRistretto::from_slice(bytes)
             .map_err(|_| anyhow!("Invalid bytes {bytes:?} length or format"))?;
-        let point = compressed
-            .decompress()
-            .ok_or(anyhow!("Bytes {bytes:?} do not represent a valid Ristretto point"))?;
+        let point = compressed.decompress().ok_or(anyhow!(
+            "Bytes {bytes:?} do not represent a valid Ristretto point"
+        ))?;
         Ok(point)
     }
 
