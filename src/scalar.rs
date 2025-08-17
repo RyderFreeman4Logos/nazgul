@@ -65,7 +65,7 @@ impl LocalByteConvertible for RistrettoPoint {
 
 impl LocalByteConvertible for Scalar {
     fn to_bytes(&self) -> [u8; 32] {
-        self.to_bytes()
+        Scalar::to_bytes(self)
     }
 
     fn from_bytes(bytes: &[u8]) -> AResult<Self>
