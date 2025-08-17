@@ -41,4 +41,5 @@ pub mod mlsag;
 pub(crate) mod prelude;
 pub mod ring;
 pub mod sag;
+pub mod scalar;
 pub mod traits;
