@@ -92,3 +92,23 @@ pub trait LocalByteConvertible {
     where
         Self: Sized;
 }
+
+// ================================================================================================
+// Trait for non-hardened key derivation.
+// ================================================================================================
+
+/// A trait for types that can be deterministically derived into a child
+/// using non-hardened derivation.
+pub trait Derivable: Sized {
+    /// Derives a child object from a parent using the provided derivation data.
+    ///
+    /// This function must be deterministic: for the same parent and the same
+    /// `derivation_data`, it must always produce the same child.
+    ///
+    /// The hash function `H` is used to create a "tweak" from the parent's
+    /// public information and the `derivation_data`.
+    fn derive_child<H: Digest<OutputSize = U64> + Clone + Default>(
+        &self,
+        derivation_data: &[u8],
+    ) -> Self;
+}

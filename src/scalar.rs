@@ -1,7 +1,8 @@
-use crate::traits::{LocalByteConvertible, PublicKeyComputable};
+use crate::traits::{Derivable, LocalByteConvertible, PublicKeyComputable};
 use anyhow::{anyhow, Result as AResult};
 use bs58;
 use core::convert::TryInto;
+use digest::{generic_array::typenum::U64, Digest};
 
 #[cfg(not(feature = "std"))]
 use alloc::{string::String, vec::Vec};
@@ -46,6 +47,22 @@ impl LocalByteConvertible for RistrettoPoint {
         let bytes = bs58::decode(input).into_vec()?;
 
         Self::from_bytes(&bytes)
+    }
+}
+
+impl Derivable for RistrettoPoint {
+    fn derive_child<H: Digest<OutputSize = U64> + Clone + Default>(
+        &self,
+        derivation_data: &[u8],
+    ) -> Self {
+        let mut hasher = H::default();
+        hasher.update(self.to_bytes());
+        hasher.update(derivation_data);
+
+        let tweak = Scalar::from_hash(hasher);
+        let tweak_point = tweak * RISTRETTO_BASEPOINT_POINT;
+
+        self + tweak_point
     }
 }
 

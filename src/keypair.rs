@@ -1,7 +1,8 @@
 use crate::scalar::{RistrettoPoint, Scalar};
-use crate::traits::{LocalByteConvertible, PublicKeyComputable};
+use crate::traits::{Derivable, LocalByteConvertible, PublicKeyComputable};
 use anyhow::Result as AResult;
 use core::fmt;
+use digest::{generic_array::typenum::U64, Digest};
 use rand_core::{CryptoRng, RngCore};
 
 #[cfg(not(feature = "std"))]
@@ -55,6 +56,31 @@ impl KeyPair {
     }
 }
 
+impl Derivable for KeyPair {
+    /// Derives a child `KeyPair` from a parent `KeyPair` using non-hardened derivation.
+    ///
+    /// The derivation is performed by creating a tweak from the master public key and
+    /// the derivation data. This ensures that public key derivation can be performed
+    /// by parties who only have the public key.
+    ///
+    /// Tweak = H(master_public_key || derivation_data)
+    /// child_secret_key = master_secret_key + Tweak
+    /// child_public_key = master_public_key + Tweak * G
+    fn derive_child<H: Digest<OutputSize = U64> + Clone + Default>(
+        &self,
+        derivation_data: &[u8],
+    ) -> Self {
+        let mut hasher = H::default();
+        hasher.update(self.public.to_bytes());
+        hasher.update(derivation_data);
+
+        let tweak = Scalar::from_hash(hasher);
+        let child_secret = self.secret + tweak;
+
+        Self::new(child_secret)
+    }
+}
+
 impl LocalByteConvertible for KeyPair {
     /// Returns the byte representation of the secret key.
     /// Note: This exposes the secret key.
@@ -84,7 +110,9 @@ impl LocalByteConvertible for KeyPair {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::traits::Derivable;
     use rand::rngs::OsRng;
+    use sha3::Sha3_512;
 
     #[test]
     fn test_keypair_new() {
@@ -145,5 +173,33 @@ mod test {
         assert!(debug_str.contains("public"));
         assert!(debug_str.contains("<REDACTED>"));
         assert!(!debug_str.contains(&format!("{:?}", keypair.secret())));
+    }
+
+    #[test]
+    fn test_keypair_derivation() {
+        let mut csprng = OsRng::default();
+        let master_keypair = KeyPair::generate(&mut csprng);
+        let derivation_data = b"my derivation path";
+
+        // Derive the child keypair from the master keypair
+        let child_keypair = master_keypair.derive_child::<Sha3_512>(derivation_data);
+
+        // For non-hardened derivation, it must be possible to derive the child
+        // public key from the master public key, without access to the private key.
+        let child_pubkey_from_master_pubkey = master_keypair
+            .public()
+            .derive_child::<Sha3_512>(derivation_data);
+
+        // The public key of the derived keypair should match the public key derived
+        // from the master public key.
+        assert_eq!(child_keypair.public(), &child_pubkey_from_master_pubkey);
+
+        // Derivation should be deterministic
+        let another_child_keypair = master_keypair.derive_child::<Sha3_512>(derivation_data);
+        assert_eq!(child_keypair, another_child_keypair);
+
+        // Different derivation data should result in a different keypair
+        let different_child_keypair = master_keypair.derive_child::<Sha3_512>(b"other data");
+        assert_ne!(child_keypair, different_child_keypair);
     }
 }
