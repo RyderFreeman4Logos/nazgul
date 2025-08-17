@@ -1,7 +1,14 @@
 use crate::error::SignatureError;
 use crate::ring::{PrecomputedRingData, Ring};
+use crate::scalar::RistrettoPoint;
+use anyhow::Result as AResult;
 use digest::{generic_array::typenum::U64, Digest};
 use rand_core::{CryptoRng, RngCore};
+
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
+#[cfg(feature = "std")]
+use std::string::String;
 
 pub trait KeyImageGen<Secret, Point> {
     fn generate_key_image<Hash: Digest<OutputSize = U64> + Clone + Default>(k: Secret) -> Point;
@@ -65,4 +72,19 @@ pub trait SignRef<Secret> {
     ) -> Result<Self, SignatureError>
     where
         Self: Sized;
+}
+
+// ================================================================================================
+// General-purpose traits for key and byte conversions.
+// ================================================================================================
+
+pub trait PublicKeyComputable {
+    fn compute_pubkey(&self) -> RistrettoPoint;
+}
+
+pub trait LocalByteConvertible {
+    fn to_bytes(&self) -> [u8; 32];
+    fn from_bytes(bytes: &[u8]) -> AResult<Self>;
+    fn to_base58(&self) -> String;
+    fn from_base58(input: String) -> AResult<Self>;
 }

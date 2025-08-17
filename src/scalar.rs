@@ -1,3 +1,4 @@
+use crate::traits::{LocalByteConvertible, PublicKeyComputable};
 use anyhow::{anyhow, Result as AResult};
 use bs58;
 use core::convert::TryInto;
@@ -17,21 +18,10 @@ pub use curve25519_dalek::{
 
 pub type PubRing = Vec<RistrettoPoint>;
 
-pub trait PublicKeyComputable {
-    fn compute_pubkey(&self) -> RistrettoPoint;
-}
-
 impl PublicKeyComputable for Scalar {
     fn compute_pubkey(&self) -> RistrettoPoint {
         self * RISTRETTO_BASEPOINT_POINT
     }
-}
-
-pub trait LocalByteConvertible {
-    fn to_bytes(&self) -> [u8; 32];
-    fn from_bytes(bytes: &[u8]) -> AResult<Self>;
-    fn to_base58(&self) -> String;
-    fn from_base58(input: String) -> AResult<Self>;
 }
 
 impl LocalByteConvertible for RistrettoPoint {

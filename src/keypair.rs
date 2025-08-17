@@ -1,4 +1,5 @@
-use crate::scalar::{LocalByteConvertible, PublicKeyComputable, RistrettoPoint, Scalar};
+use crate::scalar::{RistrettoPoint, Scalar};
+use crate::traits::{LocalByteConvertible, PublicKeyComputable};
 use anyhow::Result as AResult;
 use rand_core::{CryptoRng, RngCore};
 
