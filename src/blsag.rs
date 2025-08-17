@@ -1,4 +1,60 @@
-//! Back's Linkable Spontaneous Anonymous Group (bLSAG) signatures
+//! Back's Linkable Spontaneous Anonymous Group (bLSAG) signatures.
+//!
+//! This module implements bLSAG, an enhanced version of the Linkable Spontaneous Anonymous Group
+//! (LSAG) signature scheme where linkability is independent of the ring's decoy members.
+//! It provides signer ambiguity, unforgeability, and linkability.
+//!
+//! Signer ambiguity ensures that a signature can be verified without revealing which member of
+//! the ring created it. Unforgeability prevents an unauthorized party from creating a valid
+//! signature on behalf of the ring. Linkability allows for determining if two signatures were
+//! produced by the same signer, without revealing the signer's identity.
+//!
+//! # Example
+//!
+//! ```
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! use nazgul::blsag::BLSAG;
+//! use nazgul::keypair::KeyPair;
+//! use nazgul::ring::Ring;
+//! use nazgul::traits::{SignRef, VerifyRef};
+//! use rand::rngs::OsRng;
+//! use sha2::Sha512;
+//!
+//! let mut csprng = OsRng;
+//!
+//! // 1. Key Generation
+//! // The signer generates a keypair.
+//! let signer_keypair = KeyPair::generate(&mut csprng);
+//!
+//! // 2. Ring Formation
+//! // A ring is formed with the signer's public key and several decoy public keys.
+//! let num_decoys = 10;
+//! let mut public_keys: Vec<_> = (0..num_decoys)
+//!     .map(|_| *KeyPair::generate(&mut csprng).public())
+//!     .collect();
+//! public_keys.push(*signer_keypair.public());
+//!
+//! let ring = Ring::new(public_keys);
+//!
+//! // 3. Signing
+//! // The signer creates a signature for a message using their private key and the ring.
+//! let message = b"The traceability is a secret to everybody.";
+//! let signature = BLSAG::sign::<Sha512, OsRng>(
+//!     *signer_keypair.secret(),
+//!     &ring,
+//!     None, // No precomputed data
+//!     message,
+//! )?;
+//!
+//! // 4. Verification
+//! // A verifier checks the signature against the message and the public ring.
+//! // They do not need to know who the signer is.
+//! let is_valid = BLSAG::verify::<Sha512>(&signature, &ring, None, message);
+//!
+//! assert!(is_valid);
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::prelude::*;
 use crate::ring::{PrecomputedRingData, Ring};
