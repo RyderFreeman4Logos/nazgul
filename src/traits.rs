@@ -84,7 +84,11 @@ pub trait PublicKeyComputable {
 
 pub trait LocalByteConvertible {
     fn to_bytes(&self) -> [u8; 32];
-    fn from_bytes(bytes: &[u8]) -> AResult<Self>;
+    fn from_bytes(bytes: &[u8]) -> AResult<Self>
+    where
+        Self: Sized;
     fn to_base58(&self) -> String;
-    fn from_base58(input: String) -> AResult<Self>;
+    fn from_base58(input: String) -> AResult<Self>
+    where
+        Self: Sized;
 }
