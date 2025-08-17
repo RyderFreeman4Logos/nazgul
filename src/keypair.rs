@@ -1,6 +1,7 @@
 use crate::scalar::{RistrettoPoint, Scalar};
 use crate::traits::{LocalByteConvertible, PublicKeyComputable};
 use anyhow::Result as AResult;
+use core::fmt;
 use rand_core::{CryptoRng, RngCore};
 
 #[cfg(not(feature = "std"))]
@@ -9,10 +10,19 @@ use alloc::string::String;
 use std::string::String;
 
 /// A keypair containing a secret key (`Scalar`) and a public key (`RistrettoPoint`).
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct KeyPair {
     secret: Scalar,
     public: RistrettoPoint,
+}
+
+impl fmt::Debug for KeyPair {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeyPair")
+            .field("public", &self.public)
+            .field("secret", &"<REDACTED>")
+            .finish()
+    }
 }
 
 impl KeyPair {
@@ -68,5 +78,72 @@ impl LocalByteConvertible for KeyPair {
     fn from_base58(input: String) -> AResult<Self> {
         let secret = Scalar::from_base58(input)?;
         Ok(Self::new(secret))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use rand::rngs::OsRng;
+
+    #[test]
+    fn test_keypair_new() {
+        let mut csprng = OsRng::default();
+        let secret = Scalar::random(&mut csprng);
+        let keypair = KeyPair::new(secret);
+        assert_eq!(keypair.secret(), &secret);
+        assert_eq!(keypair.public(), &secret.compute_pubkey());
+    }
+
+    #[test]
+    fn test_keypair_generate() {
+        let mut csprng = OsRng::default();
+        let keypair = KeyPair::generate(&mut csprng);
+        assert_eq!(keypair.public(), &keypair.secret().compute_pubkey());
+    }
+
+    #[test]
+    fn test_keypair_into_keys() {
+        let mut csprng = OsRng::default();
+        let secret = Scalar::random(&mut csprng);
+        let keypair = KeyPair::new(secret);
+        let (s, p) = keypair.into_keys();
+        assert_eq!(s, secret);
+        assert_eq!(p, secret.compute_pubkey());
+    }
+
+    #[test]
+    fn test_keypair_byte_conversion() {
+        let mut csprng = OsRng::default();
+        let original_keypair = KeyPair::generate(&mut csprng);
+        let bytes = original_keypair.to_bytes();
+        let recovered_keypair = KeyPair::from_bytes(&bytes).unwrap();
+        assert_eq!(original_keypair, recovered_keypair);
+    }
+
+    #[test]
+    fn test_keypair_base58_conversion() {
+        let mut csprng = OsRng::default();
+        let original_keypair = KeyPair::generate(&mut csprng);
+        let base58_str = original_keypair.to_base58();
+        let recovered_keypair = KeyPair::from_base58(base58_str).unwrap();
+        assert_eq!(original_keypair, recovered_keypair);
+    }
+
+    #[test]
+    fn test_keypair_invalid_bytes() {
+        let wrong_length_bytes = [0u8; 31];
+        let result = KeyPair::from_bytes(&wrong_length_bytes);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_keypair_debug_format() {
+        let mut csprng = OsRng::default();
+        let keypair = KeyPair::generate(&mut csprng);
+        let debug_str = format!("{:?}", keypair);
+        assert!(debug_str.contains("public"));
+        assert!(debug_str.contains("<REDACTED>"));
+        assert!(!debug_str.contains(&format!("{:?}", keypair.secret())));
     }
 }

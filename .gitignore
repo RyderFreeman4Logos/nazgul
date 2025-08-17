@@ -844,3 +844,4 @@ MigrationBackup/
 # Gemini-related files
 GEMINI.md
 gh_pr_draft.md
+.aider*
