@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result as AResult};
+use bs58;
 use core::convert::TryInto;
 
 #[cfg(not(feature = "std"))]
