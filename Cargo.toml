@@ -13,6 +13,8 @@ repository = "https://github.com/edwinhere/nazgul"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = { version = "1.0", default-features = false }
+bs58 = "0.5"
 curve25519-dalek = { version = "4", default-features = false }
 digest = { version = "^0.10", default-features = false }
 rand_core = { version = "^0.6.4", default-features = false, features = ["getrandom"] }

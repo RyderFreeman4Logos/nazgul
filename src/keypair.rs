@@ -1,6 +1,11 @@
-use crate::prelude::*;
 use crate::scalar::{LocalByteConvertible, PublicKeyComputable, RistrettoPoint, Scalar};
-use rand::{CryptoRng, RngCore};
+use anyhow::Result as AResult;
+use rand_core::{CryptoRng, RngCore};
+
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
+#[cfg(feature = "std")]
+use std::string::String;
 
 /// A keypair containing a secret key (`Scalar`) and a public key (`RistrettoPoint`).
 #[derive(Clone, Debug)]

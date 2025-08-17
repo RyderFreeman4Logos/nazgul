@@ -1,5 +1,10 @@
-use crate::prelude::AResult;
-use anyhow::anyhow;
+use anyhow::{anyhow, Result as AResult};
+use core::convert::TryInto;
+
+#[cfg(not(feature = "std"))]
+use alloc::{string::String, vec::Vec};
+#[cfg(feature = "std")]
+use std::{string::String, vec::Vec};
 
 pub use curve25519_dalek::{
     constants::RISTRETTO_BASEPOINT_POINT,
@@ -73,6 +78,7 @@ impl LocalByteConvertible for Scalar {
             )
         })?;
         Scalar::from_canonical_bytes(bytes_array)
+            .into()
             .ok_or_else(|| anyhow!("Bytes do not represent a canonical Scalar"))
     }
 
