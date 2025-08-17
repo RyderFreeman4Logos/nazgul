@@ -2,6 +2,7 @@ use crate::scalar::{RistrettoPoint, Scalar};
 use crate::traits::{LocalByteConvertible, PublicKeyComputable};
 use anyhow::Result as AResult;
 use rand_core::{CryptoRng, RngCore};
+use core::fmt;
 
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
@@ -9,10 +10,19 @@ use alloc::string::String;
 use std::string::String;
 
 /// A keypair containing a secret key (`Scalar`) and a public key (`RistrettoPoint`).
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct KeyPair {
     secret: Scalar,
     public: RistrettoPoint,
+}
+
+impl fmt::Debug for KeyPair {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeyPair")
+            .field("public", &self.public)
+            .field("secret", &"<REDACTED>")
+            .finish()
+    }
 }
 
 impl KeyPair {
