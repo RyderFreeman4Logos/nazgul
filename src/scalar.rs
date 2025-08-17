@@ -29,13 +29,9 @@ impl PublicKeyComputable for Scalar {
 
 pub trait LocalByteConvertible {
     fn to_bytes(&self) -> [u8; 32];
-    fn from_bytes(bytes: &[u8]) -> AResult<Self>
-    where
-        Self: Sized;
+    fn from_bytes(bytes: &[u8]) -> AResult<Self>;
     fn to_base58(&self) -> String;
-    fn from_base58(input: String) -> AResult<Self>
-    where
-        Self: Sized;
+    fn from_base58(input: String) -> AResult<Self>;
 }
 
 impl LocalByteConvertible for RistrettoPoint {
@@ -48,7 +44,7 @@ impl LocalByteConvertible for RistrettoPoint {
             .map_err(|_| anyhow!("Invalid bytes {bytes:?} length or format"))?;
         let point = compressed
             .decompress()
-            .ok_or_else(|| anyhow!("Bytes {bytes:?} do not represent a valid Ristretto point"))?;
+            .ok_or(anyhow!("Bytes {bytes:?} do not represent a valid Ristretto point"))?;
         Ok(point)
     }
 
@@ -68,10 +64,7 @@ impl LocalByteConvertible for Scalar {
         Scalar::to_bytes(self)
     }
 
-    fn from_bytes(bytes: &[u8]) -> AResult<Self>
-    where
-        Self: Sized,
-    {
+    fn from_bytes(bytes: &[u8]) -> AResult<Self> {
         let bytes_array: [u8; 32] = bytes.try_into().map_err(|_| {
             anyhow!(
                 "Invalid byte length for Scalar, expected 32, got {}",
@@ -80,17 +73,14 @@ impl LocalByteConvertible for Scalar {
         })?;
         Scalar::from_canonical_bytes(bytes_array)
             .into()
-            .ok_or_else(|| anyhow!("Bytes do not represent a canonical Scalar"))
+            .ok_or(anyhow!("Bytes do not represent a canonical Scalar"))
     }
 
     fn to_base58(&self) -> String {
         bs58::encode(self.to_bytes()).into_string()
     }
 
-    fn from_base58(input: String) -> AResult<Self>
-    where
-        Self: Sized,
-    {
+    fn from_base58(input: String) -> AResult<Self> {
         let bytes = bs58::decode(input).into_vec()?;
         Self::from_bytes(&bytes)
     }

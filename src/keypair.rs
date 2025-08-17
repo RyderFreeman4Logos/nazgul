@@ -52,10 +52,7 @@ impl LocalByteConvertible for KeyPair {
     }
 
     /// Creates a `KeyPair` from a byte slice representing the secret key.
-    fn from_bytes(bytes: &[u8]) -> AResult<Self>
-    where
-        Self: Sized,
-    {
+    fn from_bytes(bytes: &[u8]) -> AResult<Self> {
         let secret = Scalar::from_bytes(bytes)?;
         Ok(Self::new(secret))
     }
@@ -67,10 +64,7 @@ impl LocalByteConvertible for KeyPair {
     }
 
     /// Creates a `KeyPair` from a base58-encoded string representing the secret key.
-    fn from_base58(input: String) -> AResult<Self>
-    where
-        Self: Sized,
-    {
+    fn from_base58(input: String) -> AResult<Self> {
         let secret = Scalar::from_base58(input)?;
         Ok(Self::new(secret))
     }
