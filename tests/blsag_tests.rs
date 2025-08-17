@@ -1,23 +1,16 @@
 use nazgul::blsag::BLSAG;
 use nazgul::error::SignatureError;
+use nazgul::keypair::KeyPair;
 use nazgul::ring::Ring;
 use nazgul::traits::{LinkRef, SignRef, VerifyRef};
 
 use curve25519_dalek::ristretto::RistrettoPoint;
-use curve25519_dalek::scalar::Scalar;
 use rand_core::{CryptoRng, OsRng, RngCore};
 use sha2::Sha512;
 
 // ==============
 // HELPER FUNCTIONS
 // ==============
-
-// Generates a random private key and its corresponding public key.
-fn generate_keypair<R: RngCore + CryptoRng>(csprng: &mut R) -> (Scalar, RistrettoPoint) {
-    let private_key = Scalar::random(csprng);
-    let public_key = private_key * curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
-    (private_key, public_key)
-}
 
 // Generates a ring of random public keys.
 fn generate_ring<R: RngCore + CryptoRng>(csprng: &mut R, num_decoys: usize) -> Vec<RistrettoPoint> {
@@ -35,7 +28,7 @@ const MESSAGE: &[u8] = b"The owls are not what they seem.";
 #[test]
 fn sign_and_verify_succeeds() {
     let mut csprng = OsRng;
-    let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
     let num_decoys = 10;
 
     let mut public_keys = generate_ring(&mut csprng, num_decoys);
@@ -50,7 +43,7 @@ fn sign_and_verify_succeeds() {
 #[test]
 fn link_succeeds_for_same_signer() {
     let mut csprng = OsRng;
-    let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
     let num_decoys = 4;
 
     let mut public_keys1 = generate_ring(&mut csprng, num_decoys);
@@ -76,14 +69,14 @@ fn link_fails_for_different_signers() {
     let mut csprng = OsRng;
 
     // Signer 1
-    let (private_key1, public_key1) = generate_keypair(&mut csprng);
+    let (private_key1, public_key1) = KeyPair::generate(&mut csprng).into_keys();
     let mut public_keys1 = generate_ring(&mut csprng, 5);
     public_keys1.push(public_key1);
     let ring1 = Ring::new(public_keys1);
     let signature1 = BLSAG::sign::<Sha512, OsRng>(private_key1, &ring1, None, MESSAGE).unwrap();
 
     // Signer 2
-    let (private_key2, public_key2) = generate_keypair(&mut csprng);
+    let (private_key2, public_key2) = KeyPair::generate(&mut csprng).into_keys();
     let mut public_keys2 = generate_ring(&mut csprng, 5);
     public_keys2.push(public_key2);
     let ring2 = Ring::new(public_keys2);
@@ -99,7 +92,7 @@ fn link_fails_for_different_signers() {
 #[test]
 fn verify_fails_with_wrong_message() {
     let mut csprng = OsRng;
-    let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
     let num_decoys = 7;
 
     let mut public_keys = generate_ring(&mut csprng, num_decoys);
@@ -126,7 +119,7 @@ fn sign_fails_if_signer_not_in_ring() {
     // Unforgeability Test: An attacker without a valid private key from the ring
     // should not be able to create a signature.
     let mut csprng = OsRng;
-    let (attacker_private_key, _) = generate_keypair(&mut csprng);
+    let (attacker_private_key, _) = KeyPair::generate(&mut csprng).into_keys();
     let num_decoys = 10;
 
     // The ring is composed entirely of decoys; the attacker's public key is not included.
@@ -147,18 +140,18 @@ fn verify_succeeds_for_every_ring_member() {
     let num_members = 5;
 
     // Create a set of keypairs for the ring members.
-    let keypairs: Vec<(Scalar, RistrettoPoint)> = (0..num_members)
-        .map(|_| generate_keypair(&mut csprng))
+    let keypairs: Vec<KeyPair> = (0..num_members)
+        .map(|_| KeyPair::generate(&mut csprng))
         .collect();
 
     let public_keys: Vec<RistrettoPoint> =
-        keypairs.iter().map(|(_, public_key)| *public_key).collect();
+        keypairs.iter().map(|keypair| *keypair.public()).collect();
     let ring = Ring::new(public_keys);
 
     // Iterate through each member, have them sign, and verify the signature.
-    for (signer_private_key, _) in keypairs.iter() {
+    for keypair in keypairs.iter() {
         let signature =
-            BLSAG::sign::<Sha512, OsRng>(*signer_private_key, &ring, None, MESSAGE).unwrap();
+            BLSAG::sign::<Sha512, OsRng>(*keypair.secret(), &ring, None, MESSAGE).unwrap();
         assert!(
             BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE),
             "Verification failed for a valid signer from the ring"
@@ -171,7 +164,7 @@ fn link_succeeds_for_same_signer_with_different_rings() {
     // Linkability Test: Two signatures from the same signer must be linkable,
     // even if the decoy sets (rings) are completely different.
     let mut csprng = OsRng;
-    let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
 
     // Create two different rings, but both contain the signer's public key.
     let mut public_keys1 = generate_ring(&mut csprng, 7);
@@ -249,7 +242,7 @@ fn link_succeeds_for_same_signer_with_different_rings() {
 #[test]
 fn sign_and_verify_with_precomputation_succeeds() {
     let mut csprng = OsRng;
-    let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
     let num_decoys = 50; // Use a slightly larger ring to make precomputation more meaningful
 
     let mut public_keys = generate_ring(&mut csprng, num_decoys);
