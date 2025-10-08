@@ -12,7 +12,7 @@
 //! # Example
 //!
 //! ```
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn main() {
 //! use nazgul::blsag::BLSAG;
 //! use nazgul::keypair::KeyPair;
 //! use nazgul::ring::Ring;
@@ -44,7 +44,7 @@
 //!     &ring,
 //!     None, // No precomputed data
 //!     message,
-//! )?;
+//! ).unwrap();
 //!
 //! // 4. Verification
 //! // A verifier checks the signature against the message and the public ring.
@@ -52,7 +52,6 @@
 //! let is_valid = BLSAG::verify::<Sha512>(&signature, &ring, None, message);
 //!
 //! assert!(is_valid);
-//! # Ok(())
 //! # }
 //! ```
 
