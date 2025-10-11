@@ -43,3 +43,6 @@ pub mod ring;
 pub mod sag;
 pub mod scalar;
 pub mod traits;
+
+#[cfg(feature = "wasm")]
+pub mod wasm;
