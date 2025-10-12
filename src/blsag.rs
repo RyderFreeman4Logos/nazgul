@@ -76,7 +76,7 @@ use serde::{Deserialize, Serialize};
 /// Please read tests at the bottom of the source code for this module for examples on how to use
 /// it
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BLSAG {
     challenge: Scalar,
     responses: Vec<Scalar>,
@@ -310,5 +310,23 @@ mod test {
         let signature_2 = BLSAG::sign::<Blake2b512, OsRng>(k, &ring, None, &message).unwrap();
         let result = BLSAG::link(&signature_1, &signature_2);
         assert!(result);
+    }
+
+    #[test]
+    fn blsag_debug() {
+        let mut csprng = OsRng::default();
+        let k: Scalar = Scalar::random(&mut csprng);
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+        let n = 2;
+        let mut public_keys: Vec<RistrettoPoint> = (0..(n - 1))
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        public_keys.push(k_point);
+        let ring = Ring::new(public_keys);
+        let message: Vec<u8> = b"This is the message".iter().cloned().collect();
+
+        let signature = BLSAG::sign::<Sha512, OsRng>(k, &ring, None, &message).unwrap();
+        // The following line will fail to compile if Debug is not implemented for BLSAG.
+        let _ = format!("{:?}", signature);
     }
 }
