@@ -58,8 +58,11 @@
 use crate::prelude::*;
 use crate::ring::{PrecomputedRingData, Ring};
 use crate::traits::{KeyImageGen, LinkRef, SignRef, VerifyRef};
+#[cfg(feature = "std")]
 use crate::keypair::KeyPair;
+#[cfg(feature = "std")]
 use rand::rngs::OsRng;
+#[cfg(feature = "std")]
 use sha3::Keccak512;
 use curve25519_dalek::constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
@@ -68,19 +71,13 @@ use curve25519_dalek::traits::VartimeMultiscalarMul;
 use digest::generic_array::typenum::U64;
 use digest::Digest;
 use rand_core::{CryptoRng, RngCore};
+#[cfg(feature = "std")]
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "serde-derive")]
 use serde::{Deserialize, Serialize};
 
-/// Encapsulates the coefficients of a linear model for predicting verification time.
-///
-/// The model is `t = a*n + c*m + d`, where:
-/// - `n`: ring_size
-/// - `m`: message_size
-/// - `a`: `nanos_per_member`
-/// - `c`: `nanos_per_byte`
-/// - `d`: `fixed_overhead_nanos`
+#[cfg(feature = "std")]
 #[cfg_attr(feature = "serde-derive", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone, Copy)]
 pub struct VerificationTimeModel {
@@ -100,6 +97,7 @@ fn default_learning_rate() -> f64 {
     1e-14 // A very small default learning rate is crucial for stability.
 }
 
+#[cfg(feature = "std")]
 impl VerificationTimeModel {
     /// Generates a hardware-specific model by running an intensive benchmark.
     ///
