@@ -58,6 +58,9 @@
 use crate::prelude::*;
 use crate::ring::{PrecomputedRingData, Ring};
 use crate::traits::{KeyImageGen, LinkRef, SignRef, VerifyRef};
+use crate::keypair::KeyPair;
+use rand::rngs::OsRng;
+use sha3::Keccak512;
 use curve25519_dalek::constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
@@ -65,9 +68,153 @@ use curve25519_dalek::traits::VartimeMultiscalarMul;
 use digest::generic_array::typenum::U64;
 use digest::Digest;
 use rand_core::{CryptoRng, RngCore};
+use std::time::{Duration, Instant};
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serde-derive")]
 use serde::{Deserialize, Serialize};
+
+/// Encapsulates the coefficients of a linear model for predicting verification time.
+///
+/// The model is `t = a*n + c*m + d`, where:
+/// - `n`: ring_size
+/// - `m`: message_size
+/// - `a`: `nanos_per_member`
+/// - `c`: `nanos_per_byte`
+/// - `d`: `fixed_overhead_nanos`
+#[cfg_attr(feature = "serde-derive", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy)]
+pub struct VerificationTimeModel {
+    pub nanos_per_member: u64,
+    pub nanos_per_byte: u64,
+    pub fixed_overhead_nanos: i64,
+}
+
+impl VerificationTimeModel {
+    /// Generates a hardware-specific model by running an intensive benchmark.
+    ///
+    /// This function can take several minutes to complete as it performs
+    /// real-time performance measurements across a wide range of parameters.
+    /// It is recommended to run this once, save the resulting model to a file,
+    /// and reload it for future use.
+    ///
+    /// # Returns
+    ///
+    /// A `VerificationTimeModel` instance with coefficients calibrated for the current machine.
+    pub fn generate_heavy() -> Self {
+        println!("Starting heavy performance model generation. This will take several minutes...");
+
+        // --- 1. Isolate `nanos_per_byte` (c) ---
+        // Keep ring size small and fixed, vary message size.
+        let n_fixed = 2;
+        let m_sizes = [1024, 131072]; // 1KB and 128KB
+        let mut times_for_m = [0u128; 2];
+
+        for (i, &m) in m_sizes.iter().enumerate() {
+            let message: Vec<u8> = vec![0; m];
+            times_for_m[i] = Self::run_benchmark(n_fixed, &message, 100);
+        }
+
+        let nanos_per_byte = ((times_for_m[1] - times_for_m[0]) as f64
+            / (m_sizes[1] - m_sizes[0]) as f64)
+            .round() as u64;
+        println!(
+            "  - Calculated nanos_per_byte (c): {}",
+            nanos_per_byte
+        );
+
+        // --- 2. Isolate `nanos_per_member` (a) ---
+        // Keep message size small and fixed, vary ring size.
+        let m_fixed = 256;
+        let message: Vec<u8> = vec![0; m_fixed];
+        let n_sizes = [100, 1000];
+        let mut times_for_n = [0u128; 2];
+
+        for (i, &n) in n_sizes.iter().enumerate() {
+            times_for_n[i] = Self::run_benchmark(n, &message, 50);
+        }
+        let nanos_per_member = ((times_for_n[1] - times_for_n[0]) as f64
+            / (n_sizes[1] - n_sizes[0]) as f64)
+            .round() as u64;
+        println!(
+            "  - Calculated nanos_per_member (a): {}",
+            nanos_per_member
+        );
+
+        // --- 3. Calculate `fixed_overhead_nanos` (d) ---
+        // Use the first measurement from the 'n' test.
+        let t1 = times_for_n[0] as i64;
+        let n1 = n_sizes[0] as i64;
+        let m1 = m_fixed as i64;
+        let a = nanos_per_member as i64;
+        let c = nanos_per_byte as i64;
+
+        let fixed_overhead_nanos = t1 - a * n1 - c * m1;
+        println!(
+            "  - Calculated fixed_overhead_nanos (d): {}",
+            fixed_overhead_nanos
+        );
+
+        println!("Performance model generation complete.");
+
+        Self {
+            nanos_per_member,
+            nanos_per_byte,
+            fixed_overhead_nanos,
+        }
+    }
+
+    /// Predicts the verification time using this model's coefficients.
+    ///
+    /// # Arguments
+    ///
+    /// * `ring_size`: The number of members in the ring.
+    /// * `message_size`: The size of the message in bytes.
+    ///
+    /// # Returns
+    ///
+    /// * An estimated `Duration` for the verification.
+    pub fn predict(&self, ring_size: usize, message_size: usize) -> Duration {
+        if ring_size == 0 {
+            return Duration::from_nanos(0);
+        }
+
+        let term_n = (self.nanos_per_member as i64) * (ring_size as i64);
+        let term_m = (self.nanos_per_byte as i64) * (message_size as i64);
+
+        let estimated_nanos = term_n + term_m + self.fixed_overhead_nanos;
+
+        if estimated_nanos > 0 {
+            Duration::from_nanos(estimated_nanos as u64)
+        } else {
+            Duration::from_nanos(0)
+        }
+    }
+
+    /// Helper function to run a benchmark for a given n and message.
+    fn run_benchmark(n: usize, message: &[u8], iterations: u32) -> u128 {
+        let mut csprng = OsRng;
+        let signer_keypair = KeyPair::generate(&mut csprng);
+
+        let mut public_keys: Vec<_> = (0..(n - 1))
+            .map(|_| *KeyPair::generate(&mut csprng).public())
+            .collect();
+        public_keys.push(*signer_keypair.public());
+        let ring = Ring::new(public_keys);
+
+        let signature =
+            BLSAG::sign::<Keccak512, OsRng>(*signer_keypair.secret(), &ring, None, message).unwrap();
+
+        let mut total_duration = Duration::new(0, 0);
+        for _ in 0..iterations {
+            let start = Instant::now();
+            let is_valid = BLSAG::verify::<Keccak512>(&signature, &ring, None, message);
+            // Prevent the compiler from optimizing away the call by using a black box.
+            let _ = std::hint::black_box(is_valid);
+            total_duration += start.elapsed();
+        }
+        total_duration.as_nanos() / iterations as u128
+    }
+}
 
 /// Back's Linkable Spontaneous Anonymous Group (bLSAG) signatures
 /// > This an enhanced version of the LSAG algorithm where linkability
@@ -328,5 +475,39 @@ mod test {
         let signature = BLSAG::sign::<Sha512, OsRng>(k, &ring, None, &message).unwrap();
         // The following line will fail to compile if Debug is not implemented for BLSAG.
         let _ = format!("{:?}", signature);
+    }
+
+    #[test]
+    #[cfg(feature = "serde-derive")]
+    fn verification_time_model_test() {
+        // Manually create a model with some hypothetical coefficients.
+        let model = VerificationTimeModel {
+            nanos_per_member: 70_000,
+            nanos_per_byte: 10,
+            fixed_overhead_nanos: -150_000,
+        };
+
+        // Test prediction.
+        let ring_size = 100;
+        let message_size = 8000; // 8 KB
+        let prediction = model.predict(ring_size, message_size);
+
+        // Expected: (70000 * 100) + (10 * 8000) - 150000 = 7,000,000 + 80,000 - 150,000 = 6,930,000 ns
+        assert_eq!(prediction.as_nanos(), 6_930_000);
+
+        // Test serialization and deserialization.
+        let serialized = serde_json::to_string(&model).unwrap();
+        let deserialized: VerificationTimeModel = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(model.nanos_per_member, deserialized.nanos_per_member);
+        assert_eq!(model.nanos_per_byte, deserialized.nanos_per_byte);
+        assert_eq!(
+            model.fixed_overhead_nanos,
+            deserialized.fixed_overhead_nanos
+        );
+
+        // Test that the deserialized model gives the same prediction.
+        let prediction2 = deserialized.predict(ring_size, message_size);
+        assert_eq!(prediction, prediction2);
     }
 }
