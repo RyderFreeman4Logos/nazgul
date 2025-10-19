@@ -87,6 +87,17 @@ pub struct VerificationTimeModel {
     pub nanos_per_member: u64,
     pub nanos_per_byte: u64,
     pub fixed_overhead_nanos: i64,
+    /// The learning rate for the online update algorithm (SGD).
+    #[cfg_attr(feature = "serde-derive", serde(default = "default_learning_rate"))]
+    pub learning_rate: f64,
+    /// The number of updates performed on this model.
+    #[cfg_attr(feature = "serde-derive", serde(default))]
+    pub updates: u64,
+}
+
+/// Serde helper to provide a default value for the learning rate.
+fn default_learning_rate() -> f64 {
+    1e-14 // A very small default learning rate is crucial for stability.
 }
 
 impl VerificationTimeModel {
@@ -160,6 +171,8 @@ impl VerificationTimeModel {
             nanos_per_member,
             nanos_per_byte,
             fixed_overhead_nanos,
+            learning_rate: default_learning_rate(),
+            updates: 0,
         }
     }
 
@@ -213,6 +226,43 @@ impl VerificationTimeModel {
             total_duration += start.elapsed();
         }
         total_duration.as_nanos() / iterations as u128
+    }
+
+    /// Updates the model coefficients based on a new, real-world measurement.
+    ///
+    /// This method uses a single step of Stochastic Gradient Descent (SGD) to refine the model.
+    /// It should be called with a pure execution time measurement, excluding any queueing delay.
+    ///
+    /// # Arguments
+    ///
+    /// * `ring_size`: The ring size of the verified signature.
+    /// * `message_size`: The message size of the verified signature.
+    /// * `actual_time`: The actual, pure execution time for the `verify` operation.
+    pub fn update(&mut self, ring_size: usize, message_size: usize, actual_time: Duration) {
+        let t_actual = actual_time.as_nanos() as f64;
+
+        // Use f64 for calculations to allow for fractional adjustments.
+        let mut a = self.nanos_per_member as f64;
+        let mut c = self.nanos_per_byte as f64;
+        let mut d = self.fixed_overhead_nanos as f64;
+
+        // 1. Predict using the current model.
+        let t_pred = a * (ring_size as f64) + c * (message_size as f64) + d;
+
+        // 2. Calculate the error.
+        let error = t_actual - t_pred;
+
+        // 3. Update coefficients based on the error and learning rate.
+        // The update is proportional to the error and the value of the corresponding variable.
+        a += self.learning_rate * error * (ring_size as f64);
+        c += self.learning_rate * error * (message_size as f64);
+        d += self.learning_rate * error; // The variable for the intercept is always 1.
+
+        // 4. Store the updated, rounded coefficients.
+        self.nanos_per_member = a.round().max(0.0) as u64;
+        self.nanos_per_byte = c.round().max(0.0) as u64;
+        self.fixed_overhead_nanos = d.round() as i64;
+        self.updates += 1;
     }
 }
 
@@ -485,6 +535,8 @@ mod test {
             nanos_per_member: 70_000,
             nanos_per_byte: 10,
             fixed_overhead_nanos: -150_000,
+            learning_rate: 1e-12, // A typical small learning rate
+            updates: 0,
         };
 
         // Test prediction.
@@ -509,5 +561,31 @@ mod test {
         // Test that the deserialized model gives the same prediction.
         let prediction2 = deserialized.predict(ring_size, message_size);
         assert_eq!(prediction, prediction2);
+    }
+
+    #[test]
+    fn verification_time_model_update_test() {
+        let mut model = VerificationTimeModel {
+            nanos_per_member: 70_000,
+            nanos_per_byte: 10,
+            fixed_overhead_nanos: -150_000,
+            learning_rate: 1e-7, // Use a larger rate for test visibility
+            updates: 0,
+        };
+
+        let ring_size = 1000;
+        let message_size = 16000;
+
+        // Predict, then "observe" a time that is significantly longer than predicted.
+        let prediction = model.predict(ring_size, message_size);
+        let actual_time = prediction + Duration::from_millis(10); // 10ms longer
+
+        model.update(ring_size, message_size, actual_time);
+
+        // Check that the coefficients have increased, as the actual time was > predicted time.
+        assert!(model.nanos_per_member > 70_000);
+        assert!(model.nanos_per_byte > 10);
+        assert!(model.fixed_overhead_nanos > -150_000);
+        assert_eq!(model.updates, 1);
     }
 }
