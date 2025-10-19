@@ -38,6 +38,8 @@ pub mod clsag;
 pub mod error;
 pub mod keypair;
 pub mod mlsag;
+#[cfg(feature = "std")]
+pub mod pow;
 pub(crate) mod prelude;
 pub mod ring;
 pub mod sag;
@@ -46,5 +48,3 @@ pub mod traits;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
-#[cfg(not(feature = "no_std"))]
-pub mod pow;

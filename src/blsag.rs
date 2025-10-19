@@ -58,16 +58,15 @@
 use crate::prelude::*;
 use crate::ring::{PrecomputedRingData, Ring};
 use crate::traits::{KeyImageGen, LinkRef, SignRef, VerifyRef};
-use rand_core::{CryptoRng, RngCore};
 use curve25519_dalek::constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::VartimeMultiscalarMul;
 use digest::generic_array::typenum::U64;
 use digest::Digest;
+use rand_core::{CryptoRng, RngCore};
 #[cfg(feature = "serde-derive")]
 use serde::{Deserialize, Serialize};
-
 
 /// Back's Linkable Spontaneous Anonymous Group (bLSAG) signatures
 /// > This an enhanced version of the LSAG algorithm where linkability
