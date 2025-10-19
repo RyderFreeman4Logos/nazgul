@@ -46,3 +46,5 @@ pub mod traits;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
+#[cfg(not(feature = "no_std"))]
+pub mod pow;

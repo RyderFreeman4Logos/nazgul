@@ -1,4 +1,4 @@
-use nazgul::blsag::VerificationTimeModel;
+use nazgul::pow::VerificationTimeModel;
 
 fn main() {
     // Generate the hardware-specific performance model by running the heavy benchmark.
