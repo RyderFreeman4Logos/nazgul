@@ -38,7 +38,7 @@ pub mod clsag;
 pub mod error;
 pub mod keypair;
 pub mod mlsag;
-#[cfg(feature = "std")]
+#[cfg(not(feature = "no_std"))]
 pub mod pow;
 pub(crate) mod prelude;
 pub mod ring;
