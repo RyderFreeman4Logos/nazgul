@@ -1,5 +1,3 @@
-
-
 use crate::blsag::BLSAG;
 use crate::keypair::KeyPair;
 use crate::prelude::*;
