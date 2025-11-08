@@ -3,8 +3,6 @@
 //!
 //!  - Spontaneous Anonymous Group (SAG) signatures
 //!  - Back's Linkable Spontaneous Anonymous Group (bLSAG) signatures
-//!  - Multilayer Linkable Spontaneous Anonymous Group (MLSAG) signatures
-//!  - Concise Linkable Spontaneous Anonymous Group (CLSAG) signatures
 //!
 //! ~~The following scheme has also been implemented from outside [Z2M2](https://www.getmonero.org/library/Zero-to-Monero-2-0-0.pdf):~~
 //!
@@ -22,11 +20,9 @@
 #![no_std]
 
 #[cfg(all(feature = "no_std", not(feature = "std")))]
-#[macro_use]
 extern crate alloc;
 
 #[cfg(feature = "std")]
-#[macro_use]
 extern crate std;
 
 extern crate curve25519_dalek;
@@ -34,10 +30,8 @@ extern crate digest;
 extern crate rand_core;
 
 pub mod blsag;
-pub mod clsag;
 pub mod error;
 pub mod keypair;
-pub mod mlsag;
 #[cfg(not(feature = "no_std"))]
 pub mod pow;
 pub(crate) mod prelude;

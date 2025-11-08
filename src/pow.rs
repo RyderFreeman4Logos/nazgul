@@ -8,6 +8,7 @@ use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use sha3::Keccak512;
 use std::time::Duration;
+use std::{println, vec};
 
 /// Encapsulates the coefficients of a linear model for predicting CPU cost.
 #[cfg_attr(feature = "serde-derive", derive(Serialize, Deserialize))]

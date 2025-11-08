@@ -3,8 +3,8 @@ A library that implements [Ring Signatures](https://en.wikipedia.org/wiki/Ring_s
 
  - Spontaneous Anonymous Group (SAG) signatures 
  - Back's Linkable Spontaneous Anonymous Group (bLSAG) signatures
- - Multilayer Linkable Spontaneous Anonymous Group (MLSAG) signatures
- - Concise Linkable Spontaneous Anonymous Group (CLSAG) signatures
+
+> ⚠️ 自 2025-11-08 起，Nazgul 为了缩减体积仅保留 SAG 与 bLSAG，MLSAG/CLSAG 的代码已经完全移除。
 
 ~~The following scheme has also been implemented from outside [Z2M2](https://www.getmonero.org/library/Zero-to-Monero-2-0-0.pdf):~~
 
