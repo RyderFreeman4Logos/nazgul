@@ -6,6 +6,9 @@
 pub enum SignatureError {
     /// Occurs when the signer's public key is not found within the provided ring.
     SignerNotFound,
+    /// Provided precomputed ring data is not compatible with the ring in use
+    /// (e.g., length mismatch).
+    InvalidPrecomputedData,
 }
 
 impl core::fmt::Display for SignatureError {
@@ -13,6 +16,9 @@ impl core::fmt::Display for SignatureError {
         match self {
             SignatureError::SignerNotFound => {
                 write!(f, "The signer's public key was not found in the ring")
+            }
+            SignatureError::InvalidPrecomputedData => {
+                write!(f, "Invalid precomputed ring data for the given ring")
             }
         }
     }

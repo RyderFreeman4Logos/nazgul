@@ -161,6 +161,13 @@ impl SignRef<Scalar> for BLSAG {
 
         let n = ring_members.len();
 
+        // If precomputed data is provided, ensure its length matches the ring size to prevent out-of-bounds access.
+        if let Some(d) = precomputed_data {
+            if d.hashed_points().len() != n {
+                return Err(SignatureError::InvalidPrecomputedData);
+            }
+        }
+
         let a: Scalar = Scalar::random(&mut csprng);
 
         let mut rs: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut csprng)).collect();
@@ -228,6 +235,19 @@ impl VerifyRef for BLSAG {
         let mut reconstructed_c: Scalar = signature.challenge;
         let message_hash = H::default().chain_update(message);
         let ring_members = ring.members();
+
+        // Length guards: never index untrusted inputs without validating sizes first.
+        let n = ring_members.len();
+        if signature.responses.len() != n {
+            // If responses count does not match ring size, treat as invalid.
+            return false;
+        }
+        if let Some(d) = precomputed_data {
+            if d.hashed_points().len() != n {
+                // If precomputed points count does not match ring size, treat as invalid.
+                return false;
+            }
+        }
 
         for (j, ring_member) in ring_members.iter().enumerate() {
             reconstructed_c = hash_ring_member_components(
@@ -327,5 +347,86 @@ mod test {
         let signature = BLSAG::sign::<Sha512, OsRng>(k, &ring, None, &message).unwrap();
         // The following line will fail to compile if Debug is not implemented for BLSAG.
         let _ = format!("{:?}", signature);
+    }
+
+    #[test]
+    fn blsag_verify_rejects_mismatched_ring_len() {
+        // Prepare basic materials
+        let mut csprng = OsRng::default();
+        let k: Scalar = Scalar::random(&mut csprng);
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+        let n = 3usize;
+
+        // Build the ring used for signing (includes signer)
+        let mut public_keys: Vec<RistrettoPoint> = (0..(n - 1))
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        public_keys.push(k_point);
+        let ring = Ring::new(public_keys);
+
+        // Produce a signature
+        let message: Vec<u8> = b"msg".to_vec();
+        let signature = BLSAG::sign::<Sha512, OsRng>(k, &ring, None, &message).unwrap();
+
+        // Construct a larger ring (one extra unrelated public key)
+        let mut bigger_members = ring.members().to_vec();
+        bigger_members.push(RistrettoPoint::random(&mut csprng));
+        let bigger_ring = Ring::new(bigger_members);
+
+        // Verification should not panic; expect false
+        let ok = BLSAG::verify::<Sha512>(&signature, &bigger_ring, None, &message);
+        assert!(!ok);
+    }
+
+    #[test]
+    fn blsag_sign_rejects_mismatched_precomputed_len() {
+        let mut csprng = OsRng::default();
+        let k: Scalar = Scalar::random(&mut csprng);
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+
+        // ring_a: smaller ring used to generate precomputation
+        let mut public_keys_a: Vec<RistrettoPoint> = (0..2)
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        public_keys_a.push(k_point);
+        let ring_a = Ring::new(public_keys_a);
+
+        // ring_b: larger ring used for signing
+        let mut public_keys_b: Vec<RistrettoPoint> = ring_a.members().to_vec();
+        public_keys_b.push(RistrettoPoint::random(&mut csprng));
+        let ring_b = Ring::new(public_keys_b);
+
+        // Using smaller ring precomputation against a larger ring should return an error, not panic
+        let precomp_small = ring_a.precompute::<Sha512>();
+        let message = b"m".to_vec();
+        let err = BLSAG::sign::<Sha512, OsRng>(k, &ring_b, Some(&precomp_small), &message)
+            .expect_err("expected InvalidPrecomputedData error");
+        assert_eq!(err, SignatureError::InvalidPrecomputedData);
+    }
+
+    #[test]
+    fn blsag_verify_rejects_mismatched_precomputed_len() {
+        let mut csprng = OsRng::default();
+        let k: Scalar = Scalar::random(&mut csprng);
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+
+        // ring_sign: used for signing
+        let mut public_keys_sign: Vec<RistrettoPoint> = (0..2)
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        public_keys_sign.push(k_point);
+        let ring_sign = Ring::new(public_keys_sign);
+        let message = b"m".to_vec();
+        let sig = BLSAG::sign::<Sha512, OsRng>(k, &ring_sign, None, &message).unwrap();
+
+        // ring_other: used to create mismatched-length precomputation
+        let mut public_keys_other = ring_sign.members().to_vec();
+        public_keys_other.push(RistrettoPoint::random(&mut csprng));
+        let ring_other = Ring::new(public_keys_other);
+        let precomp_other = ring_other.precompute::<Sha512>();
+
+        // Verification should not panic; expect false
+        let ok = BLSAG::verify::<Sha512>(&sig, &ring_sign, Some(&precomp_other), &message);
+        assert!(!ok);
     }
 }
