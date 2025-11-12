@@ -13,7 +13,7 @@ pub struct WasmKeyPair(KeyPair);
 impl WasmKeyPair {
     #[wasm_bindgen]
     pub fn generate() -> Self {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let keypair = KeyPair::generate(&mut csprng);
         Self(keypair)
     }
