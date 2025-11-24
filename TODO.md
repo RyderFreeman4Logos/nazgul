@@ -11,3 +11,18 @@
     1. Pre-calculate compressed bytes for all points (O(N)).
     2. Sort based on these bytes.
     3. Reconstruct the `Ring` with the sorted points.
+
+## 3. Ring Enhancements for Production (New)
+- [ ] **Serde Support for `Ring`**: Implement `Serialize` and `Deserialize` for the `Ring` struct to facilitate storage and network transmission.
+    - *Note*: `RistrettoPoint` serialization should use its compressed form for efficiency.
+- [ ] **Consensus Hash**: Implement `consensus_hash<D: Digest>()` for `Ring`.
+    - *Requirement*: Use SHA3 (Keccak) as the default or recommended hash in examples.
+    - *Implementation*: Since `Ring` is already sorted, we can sequentially hash the compressed bytes of all members to produce a deterministic fingerprint.
+- [ ] **Zstd Compression Investigation**:
+    - *Task*: Analyze the feasibility of using Zstd (level 22) for `Ring` serialization.
+    - *Hypothesis*: `RistrettoPoint` compressed bytes (32 bytes) are high-entropy (pseudo-random) and unlikely to compress well individually. However, a large `Vec<u8>` might have some incidental redundancy. We will add a benchmark/test to verify this before recommending it.
+
+## 4. Verification
+- [ ] Run `cargo test --all-features`.
+- [ ] Verify `serde` functionality with a test case.
+- [ ] Verify `consensus_hash` determinism.
