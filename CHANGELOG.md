@@ -1,3 +1,18 @@
+cea90f32d98197646bee1c73b84bbc0db2195fce
+### Feature: Ring Enhancements for Production
+
+Implemented key features to support distributed, caching-heavy architectures for ring signatures.
+
+*   **Serde Support**: `Ring` now implements `Serialize` and `Deserialize`.
+    *   It serializes as a simple list of points (`Vec<RistrettoPoint>`).
+    *   Deserialization **enforces** the sorting invariant by internally calling `Ring::new()`. This ensures that even manually constructed or potentially tampered JSON loads into a valid, sorted `Ring` object.
+*   **Consensus Hash**: Added `Ring::consensus_hash::<D: Digest>()`.
+    *   Provides a deterministic fingerprint of the ring's content.
+    *   Independent of the input order of keys (due to internal sorting).
+    *   Crucial for using Ring IDs in caching (Redis keys) and event sourcing (Version IDs).
+    *   Recommended default: `Sha3_256`.
+*   **Zstd Investigation**: Concluded that Zstd compression for Rings is unnecessary as compressed Elliptic Curve points are high-entropy.
+
 58c44e0dbc0d29ca90d6af514c5754141eebaa09
 ### Performance: Ring Initialization
 
