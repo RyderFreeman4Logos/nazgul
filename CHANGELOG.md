@@ -1,3 +1,10 @@
+58c44e0dbc0d29ca90d6af514c5754141eebaa09
+### Performance: Ring Initialization
+
+Optimized `Ring::new` to reduce the computational cost of sorting public keys.
+*   **Mechanism**: Pre-computed compressed byte representations for all keys before sorting.
+*   **Impact**: Reduced sorting complexity from $O(N \log N \times \text{compress})$ to $O(N \times \text{compress} + N \log N \times \text{compare})$. This avoids repeated expensive modular inversions during the sort.
+
 54ba499065068ef89a842e08b76453741f00dd00
 ### Refactor: BLSAG Signing Optimization
 
