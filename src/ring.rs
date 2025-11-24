@@ -58,9 +58,19 @@ impl Ring {
     /// The constructor takes ownership of the vector and immediately sorts the
     /// public keys to enforce the struct's invariant.
     pub fn new(public_keys: Vec<RistrettoPoint>) -> Self {
-        let mut members = public_keys;
-        // Sort by the compressed byte representation to ensure a canonical ordering.
-        members.sort_unstable_by_key(|p| p.compress().to_bytes());
+        // Optimization: Pre-compute the compressed bytes to avoid re-calculating
+        // them during the sort. `compress()` involves expensive field inversions.
+        // This reduces the complexity from O(N log N * cost_of_compress) to
+        // O(N * cost_of_compress + N log N * cost_of_byte_compare).
+        let mut members_with_bytes: Vec<([u8; 32], RistrettoPoint)> = public_keys
+            .into_iter()
+            .map(|p| (p.compress().to_bytes(), p))
+            .collect();
+
+        members_with_bytes.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+
+        let members = members_with_bytes.into_iter().map(|(_, p)| p).collect();
+
         Self { members }
     }
 

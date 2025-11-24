@@ -6,8 +6,8 @@
 - [x] **Direct `r_s` Calculation**: Calculate the signer's response `r_s` immediately after the loop using the final challenge value, avoiding the need to index back into a `cs` array.
 
 ## 2. Optimize `Ring::new` Performance
-- [ ] **Cache Compressed Points**: `RistrettoPoint::compress()` is computationally expensive. The current sorting in `Ring::new` calls this for every comparison (O(N log N) calls).
-- [ ] **Strategy**:
+- [x] **Cache Compressed Points**: `RistrettoPoint::compress()` is computationally expensive. The current sorting in `Ring::new` calls this for every comparison (O(N log N) calls).
+- [x] **Strategy**:
     1. Pre-calculate compressed bytes for all points (O(N)).
     2. Sort based on these bytes.
     3. Reconstruct the `Ring` with the sorted points.
