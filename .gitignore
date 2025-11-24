@@ -845,6 +845,6 @@ MigrationBackup/
 GEMINI.md
 gh_pr_draft.md
 .aider*
-
+**/*.zh.md
 pkg
 AGENTS.md
