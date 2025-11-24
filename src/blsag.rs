@@ -172,8 +172,6 @@ impl SignRef<Scalar> for BLSAG {
 
         let mut rs: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut csprng)).collect();
 
-        let mut cs: Vec<Scalar> = (0..n).map(|_| Scalar::ZERO).collect();
-
         // Hash of message is shared by all challenges H_n(m, ....)
         let mut message_hash = H::default();
         message_hash.update(message);
@@ -191,33 +189,50 @@ impl SignRef<Scalar> for BLSAG {
             .compress()
             .as_bytes(),
         );
-        cs[(secret_index + 1) % n] = Scalar::from_hash(h);
 
-        let mut i = (secret_index + 1) % n;
+        let c_plus_1 = Scalar::from_hash(h);
 
-        loop {
-            cs[(i + 1) % n] = hash_ring_member_components(
+        let mut current_challenge = c_plus_1;
+        let mut c_0 = if secret_index == n - 1 {
+            c_plus_1
+        } else {
+            Scalar::ZERO
+        };
+
+        // We iterate starting from the member *after* the signer (secret_index + 1).
+        // We wrap around using cycle() and stop after processing n - 1 members.
+        // The last member processed will be the one *before* the signer (secret_index - 1).
+        for (i, ring_member) in ring_members
+            .iter()
+            .enumerate()
+            .cycle()
+            .skip(secret_index + 1)
+            .take(n - 1)
+        {
+            let next_challenge = hash_ring_member_components(
                 &message_hash,
-                rs[i % n],
-                cs[i % n],
-                ring_members[i % n],
+                rs[i],
+                current_challenge,
+                *ring_member,
                 key_image,
-                precomputed_data.map(|d| d.hashed_points()[i % n]),
+                precomputed_data.map(|d| d.hashed_points()[i]),
             );
 
-            if (secret_index >= 1 && i % n == (secret_index - 1) % n)
-                || (secret_index == 0 && i % n == n - 1)
-            {
-                break;
-            } else {
-                i = (i + 1) % n;
+            current_challenge = next_challenge;
+
+            // If we just computed the challenge for index 0, save it.
+            // In the loop logic, `next_challenge` corresponds to c_{i+1}.
+            // So if we are at index n-1, we just computed c_0.
+            if i == n - 1 {
+                c_0 = current_challenge;
             }
         }
 
-        rs[secret_index] = a - (cs[secret_index] * k);
+        // After the loop, `current_challenge` holds the challenge for the signer (c_{secret_index}).
+        rs[secret_index] = a - (current_challenge * k);
 
         Ok(BLSAG {
-            challenge: cs[0],
+            challenge: c_0,
             responses: rs,
             key_image,
         })
