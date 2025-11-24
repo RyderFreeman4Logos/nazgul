@@ -48,8 +48,26 @@ impl PrecomputedRingData {
 /// for high-performance binary searching during the signing process, avoiding
 /// a slow linear scan.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(try_from = "Vec<RistrettoPoint>", into = "Vec<RistrettoPoint>")
+)]
 pub struct Ring {
     members: Vec<RistrettoPoint>,
+}
+
+// Implement TryFrom for safe deserialization that enforces sorting
+impl From<Vec<RistrettoPoint>> for Ring {
+    fn from(points: Vec<RistrettoPoint>) -> Self {
+        Self::new(points)
+    }
+}
+
+impl From<Ring> for Vec<RistrettoPoint> {
+    fn from(ring: Ring) -> Self {
+        ring.members
+    }
 }
 
 impl Ring {
@@ -78,6 +96,42 @@ impl Ring {
     /// to be in sorted order.
     pub fn members(&self) -> &[RistrettoPoint] {
         &self.members
+    }
+
+    /// Computes a deterministic "consensus hash" of the ring.
+    ///
+    /// This hash serves as a unique identifier (fingerprint) for the ring's content and ordering.
+    /// Since `Ring` guarantees its members are sorted, this hash is deterministic regardless of
+    /// the order in which the keys were originally provided to `Ring::new()`.
+    ///
+    /// This is useful for:
+    /// 1.  **Caching**: Using the hash as a key to retrieve `PrecomputedRingData`.
+    /// 2.  **Versioning**: Tracking changes to dynamic rings in an event-sourced system.
+    /// 3.  **Integrity**: Verifying that a transmitted ring matches the expected definition.
+    ///
+    /// # Example
+    /// ```
+    /// # use nazgul::ring::Ring;
+    /// # use curve25519_dalek::ristretto::RistrettoPoint;
+    /// # use rand_core::OsRng;
+    /// # use sha3::Sha3_256;
+    /// # use digest::Digest;
+    /// # fn main() {
+    /// # let mut csprng = OsRng;
+    /// let points = vec![
+    ///     RistrettoPoint::random(&mut csprng),
+    ///     RistrettoPoint::random(&mut csprng)
+    /// ];
+    /// let ring = Ring::new(points);
+    /// let hash = ring.consensus_hash::<Sha3_256>();
+    /// # }
+    /// ```
+    pub fn consensus_hash<D: Digest + Default>(&self) -> digest::Output<D> {
+        let mut hasher = D::default();
+        for member in &self.members {
+            hasher.update(member.compress().as_bytes());
+        }
+        hasher.finalize()
     }
 
     /// Performs the pre-computation step for this ring.
