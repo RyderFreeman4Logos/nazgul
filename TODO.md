@@ -13,16 +13,15 @@
     3. Reconstruct the `Ring` with the sorted points.
 
 ## 3. Ring Enhancements for Production (New)
-- [ ] **Serde Support for `Ring`**: Implement `Serialize` and `Deserialize` for the `Ring` struct to facilitate storage and network transmission.
+- [x] **Serde Support for `Ring`**: Implement `Serialize` and `Deserialize` for the `Ring` struct to facilitate storage and network transmission.
     - *Note*: `RistrettoPoint` serialization should use its compressed form for efficiency.
-- [ ] **Consensus Hash**: Implement `consensus_hash<D: Digest>()` for `Ring`.
+- [x] **Consensus Hash**: Implement `consensus_hash<D: Digest>()` for `Ring`.
     - *Requirement*: Use SHA3 (Keccak) as the default or recommended hash in examples.
     - *Implementation*: Since `Ring` is already sorted, we can sequentially hash the compressed bytes of all members to produce a deterministic fingerprint.
-- [ ] **Zstd Compression Investigation**:
-    - *Task*: Analyze the feasibility of using Zstd (level 22) for `Ring` serialization.
-    - *Hypothesis*: `RistrettoPoint` compressed bytes (32 bytes) are high-entropy (pseudo-random) and unlikely to compress well individually. However, a large `Vec<u8>` might have some incidental redundancy. We will add a benchmark/test to verify this before recommending it.
+- [x] **Zstd Compression Investigation**:
+    - *Result*: High-entropy elliptic curve points (compressed) are essentially incompressible. Adding Zstd adds overhead without benefit for typical Ring structures.
 
 ## 4. Verification
-- [ ] Run `cargo test --all-features`.
-- [ ] Verify `serde` functionality with a test case.
-- [ ] Verify `consensus_hash` determinism.
+- [x] Run `cargo test --all-features`.
+- [x] Verify `serde` functionality with a test case.
+- [x] Verify `consensus_hash` determinism.

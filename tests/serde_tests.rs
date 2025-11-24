@@ -107,3 +107,50 @@ fn test_mlsag_serde() {
     let result = MLSAG::verify::<Sha512>(deserialized, &message);
     assert!(result);
 }
+
+#[test]
+fn test_ring_serde_and_hash() {
+    let mut csprng = OsRng;
+    let n = 5;
+    let public_keys: Vec<RistrettoPoint> = (0..n)
+        .map(|_| RistrettoPoint::random(&mut csprng))
+        .collect();
+
+    let ring = Ring::new(public_keys.clone());
+    let original_hash = ring.consensus_hash::<Sha512>();
+
+    // Test Serialization
+    let serialized = serde_json::to_string(&ring).expect("Failed to serialize ring");
+
+    // Test Deserialization
+    let deserialized_ring: Ring =
+        serde_json::from_str(&serialized).expect("Failed to deserialize ring");
+    let deserialized_hash = deserialized_ring.consensus_hash::<Sha512>();
+
+    // 1. Hashes must match
+    assert_eq!(
+        original_hash, deserialized_hash,
+        "Hash mismatch after serde roundtrip"
+    );
+
+    // 2. Members must match (implies sorting was preserved/restored)
+    assert_eq!(
+        ring.members(),
+        deserialized_ring.members(),
+        "Members mismatch after serde roundtrip"
+    );
+
+    // 3. Test Consensus Hash Determinism (different order input)
+    let mut shuffled_keys = public_keys.clone();
+    // Simple manual swap to change order if n >= 2
+    if n >= 2 {
+        shuffled_keys.swap(0, 1);
+    }
+    let ring_shuffled = Ring::new(shuffled_keys);
+    let shuffled_hash = ring_shuffled.consensus_hash::<Sha512>();
+
+    assert_eq!(
+        original_hash, shuffled_hash,
+        "Consensus hash should be deterministic regardless of input order"
+    );
+}
