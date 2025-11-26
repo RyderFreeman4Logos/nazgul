@@ -1,3 +1,16 @@
+d6ae7f7af414e1681be9402b45cf9b569d4289ce
+### Feature: Contextual BLSAG
+
+Introduced `ContextualBLSAG` to support flexible ring management strategies in distributed systems.
+
+*   **Hybrid Storage Models**:
+    *   **Compact Mode**: Stores only the `RingHash` (32 bytes). Designed for high-frequency transactions where the Verifier retrieves the Ring from a cache/DB.
+    *   **Archival Mode**: Stores the full `Ring` definition. Designed for self-contained proofs, backups, and cross-system sharing.
+*   **Smart Verification**:
+    *   `verify()` automatically handles context validation.
+    *   In Compact mode, it enforces that the provided external ring matches the stored hash.
+    *   In Archival mode, it uses the internal ring for verification but can optionally validate against an external ring source.
+
 cea90f32d98197646bee1c73b84bbc0db2195fce
 ### Feature: Ring Enhancements for Production
 
