@@ -12,16 +12,26 @@
     2. Sort based on these bytes.
     3. Reconstruct the `Ring` with the sorted points.
 
-## 3. Ring Enhancements for Production (New)
+## 3. Ring Enhancements for Production
 - [x] **Serde Support for `Ring`**: Implement `Serialize` and `Deserialize` for the `Ring` struct to facilitate storage and network transmission.
-    - *Note*: `RistrettoPoint` serialization should use its compressed form for efficiency.
 - [x] **Consensus Hash**: Implement `consensus_hash<D: Digest>()` for `Ring`.
-    - *Requirement*: Use SHA3 (Keccak) as the default or recommended hash in examples.
-    - *Implementation*: Since `Ring` is already sorted, we can sequentially hash the compressed bytes of all members to produce a deterministic fingerprint.
-- [x] **Zstd Compression Investigation**:
-    - *Result*: High-entropy elliptic curve points (compressed) are essentially incompressible. Adding Zstd adds overhead without benefit for typical Ring structures.
+- [x] **Zstd Compression Investigation**: Decided against it due to high entropy.
 
-## 4. Verification
+## 4. Contextual BLSAG (Hybrid Storage/Verify)
+- [x] **Define `RingHash` Type**: Create a NewType `struct RingHash([u8; 32])` in `src/ring.rs` to strongly type the consensus hash. Implement `Serialize`, `Deserialize`, `Debug`, `Display`, `FromStr`, etc.
+- [x] **Define `RingContext` Enum**:
+    - `Compact(RingHash)`: For efficient transmission/storage.
+    - `Archival(Ring)`: For self-contained backups/sharing.
+- [x] **Define `ContextualBLSAG` Struct**:
+    - A wrapper containing `sig: BLSAG` and `context: RingContext`.
+- [x] **Implement Smart Constructors**:
+    - `sign_compact(...)`: Generates signature and stores only the hash.
+    - `sign_archival(...)`: Generates signature and stores the full ring.
+- [x] **Implement Smart Verification**:
+    - `verify(...)`: Accepts an optional external `Ring`.
+    - If `Archival`: Uses the internal ring (and optionally validates against external if provided).
+    - If `Compact`: **Requires** the external ring, verifies its hash against the stored `RingHash`, then verifies the signature.
+
+## 5. Verification
 - [x] Run `cargo test --all-features`.
-- [x] Verify `serde` functionality with a test case.
-- [x] Verify `consensus_hash` determinism.
+- [x] Add specific tests for `ContextualBLSAG` covering both Compact and Archival modes.

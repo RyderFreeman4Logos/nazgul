@@ -4,6 +4,78 @@ use crate::prelude::*;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use digest::{generic_array::typenum::U64, Digest};
 
+/// A strongly-typed wrapper for a 32-byte consensus hash of a Ring.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RingHash(pub [u8; 32]);
+
+impl core::fmt::Debug for RingHash {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "RingHash(")?;
+        for byte in &self.0 {
+            write!(f, "{:02x}", byte)?;
+        }
+        write!(f, ")")
+    }
+}
+
+impl core::fmt::Display for RingHash {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{:02x}", byte)?;
+        }
+        Ok(())
+    }
+}
+
+impl AsRef<[u8]> for RingHash {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for RingHash {
+    fn from(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+}
+
+/// Defines the context in which a ring signature is stored or verified.
+///
+/// *   `Compact`: Contains only the `RingHash`. This is ideal for network transmission
+///     and storage when the Verifier is expected to have access to the Ring definition
+///     (e.g., via a cache or database).
+/// *   `Archival`: Contains the full `Ring` definition. This makes the signature
+///     self-contained but significantly larger. Ideal for cold storage or sharing.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "type", content = "data"))]
+pub enum RingContext {
+    Compact(RingHash),
+    Archival(Ring),
+}
+
+impl RingContext {
+    /// Returns the hash associated with this context.
+    ///
+    /// If `Compact`, returns the stored hash.
+    /// If `Archival`, computes the hash of the stored ring.
+    pub fn consensus_hash<D: Digest + Default>(&self) -> RingHash {
+        match self {
+            RingContext::Compact(h) => *h,
+            RingContext::Archival(ring) => {
+                let output = ring.consensus_hash::<D>();
+                let mut bytes = [0u8; 32];
+                // Ensure we only copy what fits. If the hash is larger, it truncates (unlikely with SHA3-256).
+                // If smaller, it pads.
+                let len = core::cmp::min(output.len(), 32);
+                bytes[..len].copy_from_slice(&output[..len]);
+                RingHash(bytes)
+            }
+        }
+    }
+}
+
 /// Represents pre-computed data for a `Ring` to accelerate cryptographic operations.
 ///
 /// This structure holds the results of hashing each public key in the ring onto the curve.

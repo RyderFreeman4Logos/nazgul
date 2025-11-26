@@ -56,7 +56,7 @@
 //! ```
 
 use crate::prelude::*;
-use crate::ring::{PrecomputedRingData, Ring};
+use crate::ring::{PrecomputedRingData, Ring, RingContext, RingHash};
 use crate::traits::{KeyImageGen, LinkRef, SignRef, VerifyRef};
 use curve25519_dalek::constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
@@ -67,6 +67,128 @@ use digest::Digest;
 use rand_core::{CryptoRng, RngCore};
 #[cfg(feature = "serde-derive")]
 use serde::{Deserialize, Serialize};
+
+/// A wrapper around a BLSAG signature that includes ring context information.
+///
+/// This structure allows for two modes of operation:
+/// 1.  **Compact**: Stores only the consensus hash of the ring. This assumes the verifier
+///     can retrieve the full ring definition from elsewhere (e.g., a cache or DB) using the hash.
+///     This is ideal for efficient transmission and storage.
+/// 2.  **Archival**: Stores the full ring definition alongside the signature. This creates
+///     a self-contained proof that can be verified offline or cross-system without external dependencies.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct ContextualBLSAG {
+    pub signature: BLSAG,
+    pub context: RingContext,
+}
+
+impl ContextualBLSAG {
+    /// Signs a message and stores only the Ring's hash (Compact mode).
+    ///
+    /// Use this when you expect the verifier to have access to the Ring definition.
+    pub fn sign_compact<
+        H: Digest<OutputSize = U64> + Clone + Default,
+        CSPRNG: CryptoRng + RngCore + Default,
+    >(
+        k: Scalar,
+        ring: &Ring,
+        precomputed_data: Option<&PrecomputedRingData>,
+        message: &[u8],
+    ) -> Result<Self, SignatureError> {
+        let signature = BLSAG::sign::<H, CSPRNG>(k, ring, precomputed_data, message)?;
+        // Compute the hash using the same algorithm H used for signing (or a standard one).
+        // Here we use the generic D for consensus hash if we could, but Ring::consensus_hash is generic.
+        // For ContextualBLSAG, we need a convention. The `RingContext::consensus_hash` method
+        // allows generating the hash later. But `RingContext::Compact` needs a pre-calculated hash.
+        // We will use the provided `H` for the consensus hash to maintain consistency,
+        // assuming H is suitable for consensus (e.g. Sha3).
+        // Note: The Digest trait bound for sign is OutputSize=U64 (64 bytes), but RingHash is 32 bytes.
+        // We need to truncate or assume the user provides a suitable hash.
+        // To be safe and standard, we will just calculate the hash using H and truncate/pad to 32 bytes.
+        let output = ring.consensus_hash::<H>();
+        let mut bytes = [0u8; 32];
+        let len = core::cmp::min(output.len(), 32);
+        bytes[..len].copy_from_slice(&output[..len]);
+
+        Ok(Self {
+            signature,
+            context: RingContext::Compact(RingHash(bytes)),
+        })
+    }
+
+    /// Signs a message and stores the full Ring (Archival mode).
+    ///
+    /// Use this when you want a self-contained signature.
+    pub fn sign_archival<
+        H: Digest<OutputSize = U64> + Clone + Default,
+        CSPRNG: CryptoRng + RngCore + Default,
+    >(
+        k: Scalar,
+        ring: &Ring,
+        precomputed_data: Option<&PrecomputedRingData>,
+        message: &[u8],
+    ) -> Result<Self, SignatureError> {
+        let signature = BLSAG::sign::<H, CSPRNG>(k, ring, precomputed_data, message)?;
+        Ok(Self {
+            signature,
+            context: RingContext::Archival(ring.clone()),
+        })
+    }
+
+    /// Verifies the signature.
+    ///
+    /// *   `external_ring`:
+    ///     *   If `context` is `Compact`, this is **REQUIRED**. The verification will fail if `None`.
+    ///         The method checks if `external_ring.consensus_hash() == stored_hash` before verifying.
+    ///     *   If `context` is `Archival`, this is **OPTIONAL**.
+    ///         *   If provided, it checks if `external_ring` matches the stored ring.
+    ///         *   It always uses the stored (internal) ring for the mathematical verification.
+    pub fn verify<H: Digest<OutputSize = U64> + Clone + Default>(
+        &self,
+        external_ring: Option<&Ring>,
+        precomputed_data: Option<&PrecomputedRingData>,
+        message: &[u8],
+    ) -> bool {
+        match &self.context {
+            RingContext::Compact(stored_hash) => {
+                // Must provide external ring to verify a compact signature
+                let ring = match external_ring {
+                    Some(r) => r,
+                    None => return false,
+                };
+
+                // 1. Verify Hash
+                let output = ring.consensus_hash::<H>();
+                let mut computed_bytes = [0u8; 32];
+                let len = core::cmp::min(output.len(), 32);
+                computed_bytes[..len].copy_from_slice(&output[..len]);
+
+                if *stored_hash != RingHash(computed_bytes) {
+                    return false;
+                }
+
+                // 2. Verify Signature
+                BLSAG::verify::<H>(&self.signature, ring, precomputed_data, message)
+            }
+            RingContext::Archival(internal_ring) => {
+                // If external ring is provided, we can strictly enforce it matches.
+                if let Some(external) = external_ring {
+                    // Fast check: compare consensus hashes first
+                    let output_int = internal_ring.consensus_hash::<H>();
+                    let output_ext = external.consensus_hash::<H>();
+                    if output_int != output_ext {
+                        return false;
+                    }
+                }
+
+                // Use internal ring for verification
+                // Note: precomputed_data must match the internal ring.
+                BLSAG::verify::<H>(&self.signature, internal_ring, precomputed_data, message)
+            }
+        }
+    }
+}
 
 /// Back's Linkable Spontaneous Anonymous Group (bLSAG) signatures
 /// > This an enhanced version of the LSAG algorithm where linkability
