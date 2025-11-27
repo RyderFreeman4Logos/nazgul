@@ -1,5 +1,12 @@
+#![cfg_attr(
+    any(feature = "wasm", target_arch = "wasm32"),
+    allow(dead_code, unused_imports)
+)]
+
+#[cfg(all(not(feature = "wasm"), not(target_arch = "wasm32")))]
 use nazgul::pow::VerificationCostModel;
 
+#[cfg(all(not(feature = "wasm"), not(target_arch = "wasm32")))]
 fn main() {
     // Generate the hardware-specific performance model by running the heavy benchmark.
     let model = VerificationCostModel::generate_heavy();
@@ -21,4 +28,9 @@ fn main() {
     println!("  \"cpu_nanos_per_byte\": {},", model.cpu_nanos_per_byte);
     println!("  \"fixed_cpu_nanos\": {}", model.fixed_cpu_nanos);
     println!("}} ");
+}
+
+#[cfg(any(feature = "wasm", target_arch = "wasm32"))]
+fn main() {
+    // The time model binary is only meaningful on native targets; provide a no-op for wasm builds.
 }
