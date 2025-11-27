@@ -1,3 +1,10 @@
+9fbe2987cfb84e05e024d49608c7037ec0636513
+### Fix: wasm build gating
+
+*   Gated `pow` out of wasm builds to avoid missing `cpu_time::ThreadTime` on `wasm32-unknown-unknown -F wasm`.
+*   Wrapped the `time_model` binary so wasm targets no-op while native targets retain benchmarking output.
+*   Verified with `cargo clippy --target wasm32-unknown-unknown -F wasm -- -D warnings` and `cargo test --all --all-features`.
+
 d6ae7f7af414e1681be9402b45cf9b569d4289ce
 ### Feature: Contextual BLSAG
 
