@@ -848,3 +848,4 @@ gh_pr_draft.md
 **/*.zh.md
 pkg
 AGENTS.md
+.cargo-local
