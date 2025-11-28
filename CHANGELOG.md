@@ -57,3 +57,7 @@ The optimization focuses on two key areas:
 2.  **Performance in `Ring::new`**: Pre-calculating compressed points to avoid repeated expensive curve operations during sorting (O(N log N) -> O(N)).
 
 This planning step ensures a clear path forward before touching the core cryptographic code.
+4e560b0fef5f4c5f868819f0adc421986a81c2b1
+### Chore: ignore local cargo cache
+
+*   Added `.cargo-local` to `.gitignore` to keep workspace-specific tool state out of version control.
