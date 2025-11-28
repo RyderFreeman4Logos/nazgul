@@ -126,7 +126,7 @@ impl PrecomputedRingData {
     serde(try_from = "Vec<RistrettoPoint>", into = "Vec<RistrettoPoint>")
 )]
 pub struct Ring {
-    members: Vec<RistrettoPoint>,
+    pub members: Vec<RistrettoPoint>,
 }
 
 // Implement TryFrom for safe deserialization that enforces sorting
