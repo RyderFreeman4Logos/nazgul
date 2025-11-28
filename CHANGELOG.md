@@ -61,3 +61,9 @@ This planning step ensures a clear path forward before touching the core cryptog
 ### Chore: ignore local cargo cache
 
 *   Added `.cargo-local` to `.gitignore` to keep workspace-specific tool state out of version control.
+c9986eae07061eb7b217b0d8677e98422a2d875e
+### Feature: Ring public key mutations
+
+*   Added `add_public_key` and `remove_public_key` helpers that maintain the ring's sorted invariant by reusing the shared in-place sort routine.
+*   Extracted `sort_members_in_place` for consistent sorting logic across construction and mutation paths.
+*   Covered insertion/removal behaviors with unit tests to ensure ordering and successful removal semantics.
