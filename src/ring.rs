@@ -148,19 +148,8 @@ impl Ring {
     /// The constructor takes ownership of the vector and immediately sorts the
     /// public keys to enforce the struct's invariant.
     pub fn new(public_keys: Vec<RistrettoPoint>) -> Self {
-        // Optimization: Pre-compute the compressed bytes to avoid re-calculating
-        // them during the sort. `compress()` involves expensive field inversions.
-        // This reduces the complexity from O(N log N * cost_of_compress) to
-        // O(N * cost_of_compress + N log N * cost_of_byte_compare).
-        let mut members_with_bytes: Vec<([u8; 32], RistrettoPoint)> = public_keys
-            .into_iter()
-            .map(|p| (p.compress().to_bytes(), p))
-            .collect();
-
-        members_with_bytes.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-
-        let members = members_with_bytes.into_iter().map(|(_, p)| p).collect();
-
+        let mut members = public_keys;
+        sort_members_in_place(&mut members);
         Self { members }
     }
 
@@ -218,5 +207,102 @@ impl Ring {
             .map(|p| RistrettoPoint::from_hash(H::default().chain_update(p.compress().to_bytes())))
             .collect();
         PrecomputedRingData { hashed_points }
+    }
+
+    /// Adds a public key to the ring while preserving the sorted invariant.
+    ///
+    /// The key is inserted and the members are re-sorted by their compressed byte
+    /// representation. Duplicate entries are allowed and will be placed according
+    /// to their sort order.
+    pub fn add_public_key(&mut self, pubkey: RistrettoPoint) {
+        self.members.push(pubkey);
+        sort_members_in_place(&mut self.members);
+    }
+
+    /// Removes the first occurrence of the given public key, preserving order.
+    ///
+    /// Returns `true` if a matching key was removed, `false` otherwise. The
+    /// ring remains sorted after removal.
+    pub fn remove_public_key(&mut self, pubkey: RistrettoPoint) -> bool {
+        let target_bytes = pubkey.compress().to_bytes();
+        match self
+            .members
+            .binary_search_by(|p| p.compress().to_bytes().cmp(&target_bytes))
+        {
+            Ok(pos) => {
+                self.members.remove(pos);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+/// Sorts ring members by their compressed byte representation.
+fn sort_members_in_place(members: &mut Vec<RistrettoPoint>) {
+    // Optimization: Pre-compute the compressed bytes to avoid re-calculating
+    // them during the sort. `compress()` involves expensive field inversions.
+    let mut members_with_bytes: Vec<([u8; 32], RistrettoPoint)> = members
+        .drain(..)
+        .map(|p| (p.compress().to_bytes(), p))
+        .collect();
+
+    members_with_bytes.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+
+    *members = members_with_bytes.into_iter().map(|(_, p)| p).collect();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha3::Sha3_512;
+
+    fn sample_points() -> Vec<RistrettoPoint> {
+        ["alpha", "beta", "gamma"]
+            .iter()
+            .map(|label| RistrettoPoint::from_hash(Sha3_512::new().chain_update(label.as_bytes())))
+            .collect()
+    }
+
+    #[test]
+    fn add_public_key_keeps_ring_sorted() {
+        let mut points = sample_points();
+        let p_gamma = points.pop().unwrap();
+        let p_beta = points.pop().unwrap();
+        let p_alpha = points.pop().unwrap();
+
+        let mut ring = Ring::new(vec![p_beta, p_gamma]);
+        ring.add_public_key(p_alpha);
+
+        let mut expected = vec![p_alpha, p_beta, p_gamma];
+        sort_members_in_place(&mut expected);
+
+        assert_eq!(ring.members(), expected.as_slice());
+    }
+
+    #[test]
+    fn remove_public_key_removes_first_match() {
+        let points = sample_points();
+        let mut ring = Ring::new(points.clone());
+
+        assert!(ring.remove_public_key(points[1]));
+
+        let mut expected = vec![points[0], points[2]];
+        sort_members_in_place(&mut expected);
+
+        assert_eq!(ring.members(), expected.as_slice());
+    }
+
+    #[test]
+    fn remove_public_key_returns_false_when_absent() {
+        let points = sample_points();
+        let mut ring = Ring::new(vec![points[0], points[1]]);
+
+        assert!(!ring.remove_public_key(points[2]));
+
+        let mut expected = vec![points[0], points[1]];
+        sort_members_in_place(&mut expected);
+
+        assert_eq!(ring.members(), expected.as_slice());
     }
 }
