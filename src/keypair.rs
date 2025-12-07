@@ -1,4 +1,4 @@
-use crate::scalar::{RistrettoPoint, Scalar};
+use crate::scalar::{compute_derivation_tweak, RistrettoPoint, Scalar, RISTRETTO_BASEPOINT_POINT};
 use crate::traits::{Derivable, LocalByteConvertible, PublicKeyComputable};
 use anyhow::Result as AResult;
 use core::fmt;
@@ -88,21 +88,12 @@ impl Derivable for KeyPair {
         &self,
         derivation_data: &[u8],
     ) -> Self {
-        let mut hasher = H::default();
-        hasher.update(self.public.to_bytes());
-        hasher.update(derivation_data);
-
-        let tweak = Scalar::from_hash(hasher);
+        let tweak = compute_derivation_tweak::<H>(&self.public, derivation_data);
 
         // If we have a secret key, derive the child secret key.
         let child_secret = self.secret.map(|s| s + tweak);
 
-        // We can always derive the child public key.
-        // Optimization: If we calculated child_secret, we could compute pubkey from it,
-        // but deriving from public key is consistent with the "public derivation" promise.
-        // Actually, for consistency and performance (if secret exists, base point mul might be same cost as point add),
-        // let's stick to the formula: P_child = P_parent + Tweak * G.
-        let tweak_point = tweak * curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
+        let tweak_point = tweak * RISTRETTO_BASEPOINT_POINT;
         let child_public = self.public + tweak_point;
 
         Self {

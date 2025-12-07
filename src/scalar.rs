@@ -50,19 +50,38 @@ impl LocalByteConvertible for RistrettoPoint {
     }
 }
 
+/// Computes the derivation tweak from a public key and derivation data.
+///
+/// Tweak = H(public_key || derivation_data)
+pub fn compute_derivation_tweak<H: Digest<OutputSize = U64> + Clone + Default>(
+    public_key: &RistrettoPoint,
+    derivation_data: &[u8],
+) -> Scalar {
+    let mut hasher = H::default();
+    hasher.update(public_key.to_bytes());
+    hasher.update(derivation_data);
+    Scalar::from_hash(hasher)
+}
+
 impl Derivable for RistrettoPoint {
     fn derive_child<H: Digest<OutputSize = U64> + Clone + Default>(
         &self,
         derivation_data: &[u8],
     ) -> Self {
-        let mut hasher = H::default();
-        hasher.update(self.to_bytes());
-        hasher.update(derivation_data);
-
-        let tweak = Scalar::from_hash(hasher);
+        let tweak = compute_derivation_tweak::<H>(self, derivation_data);
         let tweak_point = tweak * RISTRETTO_BASEPOINT_POINT;
-
         self + tweak_point
+    }
+}
+
+impl Derivable for Scalar {
+    fn derive_child<H: Digest<OutputSize = U64> + Clone + Default>(
+        &self,
+        derivation_data: &[u8],
+    ) -> Self {
+        let public_key = self.compute_pubkey();
+        let tweak = compute_derivation_tweak::<H>(&public_key, derivation_data);
+        self + tweak
     }
 }
 
