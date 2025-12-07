@@ -99,9 +99,13 @@ impl VerificationCostModel {
             .collect();
         public_keys.push(*signer_keypair.public());
         let ring = Ring::new(public_keys);
-        let signature =
-            BLSAG::sign::<Keccak512, OsRng>(*signer_keypair.secret(), &ring, None, message)
-                .unwrap();
+        let signature = BLSAG::sign::<Keccak512, OsRng>(
+            *signer_keypair.secret().unwrap(),
+            &ring,
+            None,
+            message,
+        )
+        .unwrap();
         let mut total_duration = Duration::new(0, 0);
         for _ in 0..iterations {
             let start = ThreadTime::now();

@@ -29,6 +29,7 @@ const MESSAGE: &[u8] = b"The owls are not what they seem.";
 fn sign_and_verify_succeeds() {
     let mut csprng = OsRng;
     let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
     let num_decoys = 10;
 
     let mut public_keys = generate_ring(&mut csprng, num_decoys);
@@ -44,6 +45,7 @@ fn sign_and_verify_succeeds() {
 fn link_succeeds_for_same_signer() {
     let mut csprng = OsRng;
     let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
     let num_decoys = 4;
 
     let mut public_keys1 = generate_ring(&mut csprng, num_decoys);
@@ -70,6 +72,7 @@ fn link_fails_for_different_signers() {
 
     // Signer 1
     let (private_key1, public_key1) = KeyPair::generate(&mut csprng).into_keys();
+    let private_key1 = private_key1.unwrap();
     let mut public_keys1 = generate_ring(&mut csprng, 5);
     public_keys1.push(public_key1);
     let ring1 = Ring::new(public_keys1);
@@ -77,6 +80,7 @@ fn link_fails_for_different_signers() {
 
     // Signer 2
     let (private_key2, public_key2) = KeyPair::generate(&mut csprng).into_keys();
+    let private_key2 = private_key2.unwrap();
     let mut public_keys2 = generate_ring(&mut csprng, 5);
     public_keys2.push(public_key2);
     let ring2 = Ring::new(public_keys2);
@@ -93,6 +97,7 @@ fn link_fails_for_different_signers() {
 fn verify_fails_with_wrong_message() {
     let mut csprng = OsRng;
     let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
     let num_decoys = 7;
 
     let mut public_keys = generate_ring(&mut csprng, num_decoys);
@@ -120,6 +125,7 @@ fn sign_fails_if_signer_not_in_ring() {
     // should not be able to create a signature.
     let mut csprng = OsRng;
     let (attacker_private_key, _) = KeyPair::generate(&mut csprng).into_keys();
+    let attacker_private_key = attacker_private_key.unwrap();
     let num_decoys = 10;
 
     // The ring is composed entirely of decoys; the attacker's public key is not included.
@@ -151,7 +157,7 @@ fn verify_succeeds_for_every_ring_member() {
     // Iterate through each member, have them sign, and verify the signature.
     for keypair in keypairs.iter() {
         let signature =
-            BLSAG::sign::<Sha512, OsRng>(*keypair.secret(), &ring, None, MESSAGE).unwrap();
+            BLSAG::sign::<Sha512, OsRng>(*keypair.secret().unwrap(), &ring, None, MESSAGE).unwrap();
         assert!(
             BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE),
             "Verification failed for a valid signer from the ring"
@@ -165,6 +171,7 @@ fn link_succeeds_for_same_signer_with_different_rings() {
     // even if the decoy sets (rings) are completely different.
     let mut csprng = OsRng;
     let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
 
     // Create two different rings, but both contain the signer's public key.
     let mut public_keys1 = generate_ring(&mut csprng, 7);
@@ -243,6 +250,7 @@ fn link_succeeds_for_same_signer_with_different_rings() {
 fn sign_and_verify_with_precomputation_succeeds() {
     let mut csprng = OsRng;
     let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
     let num_decoys = 50; // Use a slightly larger ring to make precomputation more meaningful
 
     let mut public_keys = generate_ring(&mut csprng, num_decoys);

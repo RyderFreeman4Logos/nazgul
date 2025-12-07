@@ -13,15 +13,21 @@ use std::string::String;
 /// A keypair containing a secret key (`Scalar`) and a public key (`RistrettoPoint`).
 #[derive(Clone, PartialEq, Eq)]
 pub struct KeyPair {
-    secret: Scalar,
+    secret: Option<Scalar>,
     public: RistrettoPoint,
 }
 
 impl fmt::Debug for KeyPair {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let secret_debug = if self.secret.is_some() {
+            "<REDACTED>"
+        } else {
+            "None"
+        };
+
         f.debug_struct("KeyPair")
             .field("public", &self.public)
-            .field("secret", &"<REDACTED>")
+            .field("secret", &secret_debug)
             .finish()
     }
 }
@@ -31,7 +37,19 @@ impl KeyPair {
     /// The public key is computed from the secret key.
     pub fn new(secret: Scalar) -> Self {
         let public = secret.compute_pubkey();
-        Self { secret, public }
+        Self {
+            secret: Some(secret),
+            public,
+        }
+    }
+
+    /// Creates a new `KeyPair` from a public key (`RistrettoPoint`) only.
+    /// This `KeyPair` will not contain a secret key.
+    pub fn from_public_key_only(public: RistrettoPoint) -> Self {
+        Self {
+            secret: None,
+            public,
+        }
     }
 
     /// Generates a new random `KeyPair`.
@@ -45,13 +63,13 @@ impl KeyPair {
         &self.public
     }
 
-    /// Returns a reference to the secret key.
-    pub fn secret(&self) -> &Scalar {
-        &self.secret
+    /// Returns a reference to the secret key, if present.
+    pub fn secret(&self) -> Option<&Scalar> {
+        self.secret.as_ref()
     }
 
     /// Consumes the `KeyPair` and returns the secret and public keys.
-    pub fn into_keys(self) -> (Scalar, RistrettoPoint) {
+    pub fn into_keys(self) -> (Option<Scalar>, RistrettoPoint) {
         (self.secret, self.public)
     }
 }
@@ -75,17 +93,36 @@ impl Derivable for KeyPair {
         hasher.update(derivation_data);
 
         let tweak = Scalar::from_hash(hasher);
-        let child_secret = self.secret + tweak;
 
-        Self::new(child_secret)
+        // If we have a secret key, derive the child secret key.
+        let child_secret = self.secret.map(|s| s + tweak);
+
+        // We can always derive the child public key.
+        // Optimization: If we calculated child_secret, we could compute pubkey from it,
+        // but deriving from public key is consistent with the "public derivation" promise.
+        // Actually, for consistency and performance (if secret exists, base point mul might be same cost as point add),
+        // let's stick to the formula: P_child = P_parent + Tweak * G.
+        let tweak_point = tweak * curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
+        let child_public = self.public + tweak_point;
+
+        Self {
+            secret: child_secret,
+            public: child_public,
+        }
     }
 }
 
 impl LocalByteConvertible for KeyPair {
     /// Returns the byte representation of the secret key.
     /// Note: This exposes the secret key.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `KeyPair` does not contain a secret key.
     fn to_bytes(&self) -> [u8; 32] {
-        self.secret.to_bytes()
+        self.secret
+            .expect("Cannot convert public-only KeyPair to secret bytes")
+            .to_bytes()
     }
 
     /// Creates a `KeyPair` from a byte slice representing the secret key.
@@ -96,8 +133,14 @@ impl LocalByteConvertible for KeyPair {
 
     /// Returns the base58-encoded string of the secret key.
     /// Note: This exposes the secret key.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `KeyPair` does not contain a secret key.
     fn to_base58(&self) -> String {
-        self.secret.to_base58()
+        self.secret
+            .expect("Cannot convert public-only KeyPair to secret bytes")
+            .to_base58()
     }
 
     /// Creates a `KeyPair` from a base58-encoded string representing the secret key.
@@ -119,15 +162,28 @@ mod test {
         let mut csprng = OsRng::default();
         let secret = Scalar::random(&mut csprng);
         let keypair = KeyPair::new(secret);
-        assert_eq!(keypair.secret(), &secret);
+        assert_eq!(keypair.secret(), Some(&secret));
         assert_eq!(keypair.public(), &secret.compute_pubkey());
+    }
+
+    #[test]
+    fn test_keypair_from_public_key_only() {
+        let mut csprng = OsRng::default();
+        let secret = Scalar::random(&mut csprng);
+        let public = secret.compute_pubkey();
+        let keypair = KeyPair::from_public_key_only(public);
+        assert_eq!(keypair.secret(), None);
+        assert_eq!(keypair.public(), &public);
     }
 
     #[test]
     fn test_keypair_generate() {
         let mut csprng = OsRng::default();
         let keypair = KeyPair::generate(&mut csprng);
-        assert_eq!(keypair.public(), &keypair.secret().compute_pubkey());
+        assert_eq!(
+            keypair.public(),
+            &keypair.secret().unwrap().compute_pubkey()
+        );
     }
 
     #[test]
@@ -136,7 +192,7 @@ mod test {
         let secret = Scalar::random(&mut csprng);
         let keypair = KeyPair::new(secret);
         let (s, p) = keypair.into_keys();
-        assert_eq!(s, secret);
+        assert_eq!(s, Some(secret));
         assert_eq!(p, secret.compute_pubkey());
     }
 
@@ -147,6 +203,16 @@ mod test {
         let bytes = original_keypair.to_bytes();
         let recovered_keypair = KeyPair::from_bytes(&bytes).unwrap();
         assert_eq!(original_keypair, recovered_keypair);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot convert public-only KeyPair to secret bytes")]
+    fn test_keypair_public_only_to_bytes_panic() {
+        let mut csprng = OsRng::default();
+        let secret = Scalar::random(&mut csprng);
+        let public = secret.compute_pubkey();
+        let keypair = KeyPair::from_public_key_only(public);
+        keypair.to_bytes();
     }
 
     #[test]
@@ -172,7 +238,11 @@ mod test {
         let debug_str = format!("{:?}", keypair);
         assert!(debug_str.contains("public"));
         assert!(debug_str.contains("<REDACTED>"));
-        assert!(!debug_str.contains(&format!("{:?}", keypair.secret())));
+        assert!(!debug_str.contains(&format!("{:?}", keypair.secret().unwrap())));
+
+        let public_only = KeyPair::from_public_key_only(*keypair.public());
+        let debug_str_pub = format!("{:?}", public_only);
+        assert!(debug_str_pub.contains("None"));
     }
 
     #[test]
@@ -201,5 +271,32 @@ mod test {
         // Different derivation data should result in a different keypair
         let different_child_keypair = master_keypair.derive_child::<Sha3_512>(b"other data");
         assert_ne!(child_keypair, different_child_keypair);
+    }
+
+    #[test]
+    fn test_public_only_derivation() {
+        let mut csprng = OsRng::default();
+        let master_secret = Scalar::random(&mut csprng);
+        let master_public = master_secret.compute_pubkey();
+
+        let master_keypair_full = KeyPair::new(master_secret);
+        let master_keypair_pub = KeyPair::from_public_key_only(master_public);
+
+        let derivation_data = b"view only derivation";
+
+        // Derive from full keypair
+        let child_full = master_keypair_full.derive_child::<Sha3_512>(derivation_data);
+
+        // Derive from public only keypair
+        let child_pub = master_keypair_pub.derive_child::<Sha3_512>(derivation_data);
+
+        // Public keys should match
+        assert_eq!(child_full.public(), child_pub.public());
+
+        // Child from public only should have no secret
+        assert_eq!(child_pub.secret(), None);
+
+        // Child from full should have secret
+        assert!(child_full.secret().is_some());
     }
 }

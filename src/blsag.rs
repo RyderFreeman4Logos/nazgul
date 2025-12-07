@@ -40,7 +40,7 @@
 //! // The signer creates a signature for a message using their private key and the ring.
 //! let message = b"The traceability is a secret to everybody.";
 //! let signature = BLSAG::sign::<Sha512, OsRng>(
-//!     *signer_keypair.secret(),
+//!     *signer_keypair.secret().unwrap(),
 //!     &ring,
 //!     None, // No precomputed data
 //!     message,

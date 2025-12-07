@@ -24,9 +24,13 @@ fn test_contextual_compact_workflow() {
     let message = b"Compact Mode Test";
 
     // 1. Sign in Compact mode
-    let sig =
-        ContextualBLSAG::sign_compact::<Sha512, OsRng>(*signer.secret(), &ring, None, message)
-            .unwrap();
+    let sig = ContextualBLSAG::sign_compact::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
 
     // Ensure it stored a Hash
     match sig.context {
@@ -51,9 +55,13 @@ fn test_contextual_archival_workflow() {
     let message = b"Archival Mode Test";
 
     // 1. Sign in Archival mode
-    let sig =
-        ContextualBLSAG::sign_archival::<Sha512, OsRng>(*signer.secret(), &ring, None, message)
-            .unwrap();
+    let sig = ContextualBLSAG::sign_archival::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
 
     // Ensure it stored a Ring
     match sig.context {
@@ -79,17 +87,25 @@ fn test_contextual_serde() {
     let message = b"Serde Test";
 
     // Compact
-    let compact_sig =
-        ContextualBLSAG::sign_compact::<Sha512, OsRng>(*signer.secret(), &ring, None, message)
-            .unwrap();
+    let compact_sig = ContextualBLSAG::sign_compact::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
     let compact_json = serde_json::to_string(&compact_sig).unwrap();
     let compact_deserialized: ContextualBLSAG = serde_json::from_str(&compact_json).unwrap();
     assert!(compact_deserialized.verify::<Sha512>(Some(&ring), None, message));
 
     // Archival
-    let archival_sig =
-        ContextualBLSAG::sign_archival::<Sha512, OsRng>(*signer.secret(), &ring, None, message)
-            .unwrap();
+    let archival_sig = ContextualBLSAG::sign_archival::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
     let archival_json = serde_json::to_string(&archival_sig).unwrap();
     let archival_deserialized: ContextualBLSAG = serde_json::from_str(&archival_json).unwrap();
     // Verify self-contained
