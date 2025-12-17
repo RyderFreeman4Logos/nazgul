@@ -1,3 +1,12 @@
+26a1149924b803b2e5077229b5454ae50b384b0a
+### Fix: Deterministic ring member removal
+
+Ensured `Ring::remove_public_key` matches its documented behavior when duplicates exist.
+
+*   **Bug**: The implementation used `binary_search_by`, which may return any matching index in the presence of duplicates. While duplicates are unusual for rings, the method's contract explicitly said it removes the first occurrence.
+*   **Fix**: After `binary_search_by` succeeds, the code now scans backward to the first equal compressed-key segment before removing.
+*   **Coverage**: Added a unit test for removal when duplicate keys are present, ensuring one occurrence is removed and the ring remains sorted.
+
 fcbfcdbfd24c0383ff89c5dcff617d89bf0db2c4
 ### Feature: Fake signature generators
 
