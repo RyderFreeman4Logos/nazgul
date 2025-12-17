@@ -290,3 +290,17 @@ fn sign_and_verify_with_precomputation_succeeds() {
         "Verification should fail with incorrect precomputed data"
     );
 }
+
+#[test]
+fn fake_signature_fails_verification() {
+    let mut csprng = OsRng;
+    let num_decoys = 10;
+    // Note: We don't need a signer key here, just a ring of random keys.
+    let public_keys = generate_ring(&mut csprng, num_decoys);
+    let ring = Ring::new(public_keys);
+
+    let signature = BLSAG::generate_fake::<OsRng>(&ring);
+
+    // Verify should fail
+    assert!(!BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE));
+}

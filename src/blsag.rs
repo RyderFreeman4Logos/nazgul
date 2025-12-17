@@ -133,6 +133,35 @@ impl ContextualBLSAG {
         })
     }
 
+    /// Generates a fake ContextualBLSAG with Compact context.
+    ///
+    /// See `BLSAG::generate_fake` for details.
+    pub fn generate_fake_compact<
+        H: Digest<OutputSize = U64> + Clone + Default,
+        CSPRNG: CryptoRng + RngCore + Default,
+    >(
+        ring: &Ring,
+    ) -> Self {
+        let signature = BLSAG::generate_fake::<CSPRNG>(ring);
+        let stored_hash = RingHash::from_output::<H>(ring.consensus_hash::<H>());
+
+        Self {
+            signature,
+            context: RingContext::Compact(stored_hash),
+        }
+    }
+
+    /// Generates a fake ContextualBLSAG with Archival context.
+    ///
+    /// See `BLSAG::generate_fake` for details.
+    pub fn generate_fake_archival<CSPRNG: CryptoRng + RngCore + Default>(ring: &Ring) -> Self {
+        let signature = BLSAG::generate_fake::<CSPRNG>(ring);
+        Self {
+            signature,
+            context: RingContext::Archival(ring.clone()),
+        }
+    }
+
     /// Verifies the signature.
     ///
     /// *   `external_ring`:
@@ -201,6 +230,30 @@ pub struct BLSAG {
 impl BLSAG {
     pub fn key_image(&self) -> RistrettoPoint {
         self.key_image
+    }
+
+    /// Generates a fake BLSAG signature for testing purposes.
+    ///
+    /// The generated signature is structurally valid (contains valid points and scalars)
+    /// but is cryptographically invalid. Use this to test robustness against DOS attacks
+    /// or other scenarios where large numbers of invalid signatures are needed efficiently.
+    ///
+    /// # Performance
+    /// This method performs `n + 1` RNG calls (where `n` is ring size) and 1 RistrettoPoint generation.
+    /// It avoids expensive multiscalar multiplications required for real signing.
+    pub fn generate_fake<CSPRNG: CryptoRng + RngCore + Default>(ring: &Ring) -> Self {
+        let mut csprng = CSPRNG::default();
+        let n = ring.members().len();
+
+        let challenge = Scalar::random(&mut csprng);
+        let responses: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut csprng)).collect();
+        let key_image = RistrettoPoint::random(&mut csprng);
+
+        BLSAG {
+            challenge,
+            responses,
+            key_image,
+        }
     }
 }
 
