@@ -1,3 +1,14 @@
+fcbfcdbfd24c0383ff89c5dcff617d89bf0db2c4
+### Feature: Fake signature generators
+
+Added helpers to efficiently produce *structurally valid* but *cryptographically invalid* signatures for negative testing and stress/load scenarios.
+
+*   **Motivation**: Benchmarks and robustness tests often need to process large volumes of invalid signatures without paying the full cost of real signing. A dedicated generator avoids ad-hoc test code and makes the intent explicit.
+*   **API**:
+    *   `BLSAG::generate_fake` creates a signature-shaped object with random scalars/points.
+    *   `ContextualBLSAG::{generate_fake_compact, generate_fake_archival}` mirror the existing storage modes for end-to-end testing.
+*   **Tests**: Added a regression test asserting that a fake signature does not accidentally pass verification.
+
 0fdcc5e06a1bedd8a4619695235840b2282f5aba
 ### Refactor: RingHash derivation helper
 
