@@ -234,7 +234,10 @@ impl Ring {
             .members
             .binary_search_by(|p| p.compress().to_bytes().cmp(&target_bytes))
         {
-            Ok(pos) => {
+            Ok(mut pos) => {
+                while pos > 0 && self.members[pos - 1].compress().to_bytes() == target_bytes {
+                    pos -= 1;
+                }
                 self.members.remove(pos);
                 true
             }
@@ -306,6 +309,26 @@ mod tests {
         assert!(!ring.remove_public_key(points[2]));
 
         let mut expected = vec![points[0], points[1]];
+        sort_members_in_place(&mut expected);
+
+        assert_eq!(ring.members(), expected.as_slice());
+    }
+
+    #[test]
+    fn remove_public_key_with_duplicates_removes_single_occurrence() {
+        let points = sample_points();
+        let mut ring = Ring::new(vec![points[0], points[1], points[1], points[2]]);
+
+        assert!(ring.remove_public_key(points[1]));
+
+        let remaining = ring
+            .members()
+            .iter()
+            .filter(|p| p.compress().to_bytes() == points[1].compress().to_bytes())
+            .count();
+        assert_eq!(remaining, 1);
+
+        let mut expected = vec![points[0], points[1], points[2]];
         sort_members_in_place(&mut expected);
 
         assert_eq!(ring.members(), expected.as_slice());
