@@ -106,14 +106,11 @@ impl ContextualBLSAG {
         // Note: The Digest trait bound for sign is OutputSize=U64 (64 bytes), but RingHash is 32 bytes.
         // We need to truncate or assume the user provides a suitable hash.
         // To be safe and standard, we will just calculate the hash using H and truncate/pad to 32 bytes.
-        let output = ring.consensus_hash::<H>();
-        let mut bytes = [0u8; 32];
-        let len = core::cmp::min(output.len(), 32);
-        bytes[..len].copy_from_slice(&output[..len]);
+        let stored_hash = RingHash::from_output::<H>(ring.consensus_hash::<H>());
 
         Ok(Self {
             signature,
-            context: RingContext::Compact(RingHash(bytes)),
+            context: RingContext::Compact(stored_hash),
         })
     }
 
@@ -159,12 +156,9 @@ impl ContextualBLSAG {
                 };
 
                 // 1. Verify Hash
-                let output = ring.consensus_hash::<H>();
-                let mut computed_bytes = [0u8; 32];
-                let len = core::cmp::min(output.len(), 32);
-                computed_bytes[..len].copy_from_slice(&output[..len]);
+                let output = RingHash::from_output::<H>(ring.consensus_hash::<H>());
 
-                if *stored_hash != RingHash(computed_bytes) {
+                if *stored_hash != output {
                     return false;
                 }
 

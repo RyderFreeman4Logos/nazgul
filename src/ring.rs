@@ -40,6 +40,19 @@ impl From<[u8; 32]> for RingHash {
     }
 }
 
+impl RingHash {
+    /// Creates a RingHash from a Digest Output.
+    ///
+    /// If the hash output is larger than 32 bytes, it truncates.
+    /// If smaller, it pads with zeros.
+    pub fn from_output<D: Digest>(output: digest::Output<D>) -> Self {
+        let mut bytes = [0u8; 32];
+        let len = core::cmp::min(output.len(), 32);
+        bytes[..len].copy_from_slice(&output[..len]);
+        Self(bytes)
+    }
+}
+
 /// Defines the context in which a ring signature is stored or verified.
 ///
 /// *   `Compact`: Contains only the `RingHash`. This is ideal for network transmission
@@ -63,15 +76,7 @@ impl RingContext {
     pub fn consensus_hash<D: Digest + Default>(&self) -> RingHash {
         match self {
             RingContext::Compact(h) => *h,
-            RingContext::Archival(ring) => {
-                let output = ring.consensus_hash::<D>();
-                let mut bytes = [0u8; 32];
-                // Ensure we only copy what fits. If the hash is larger, it truncates (unlikely with SHA3-256).
-                // If smaller, it pads.
-                let len = core::cmp::min(output.len(), 32);
-                bytes[..len].copy_from_slice(&output[..len]);
-                RingHash(bytes)
-            }
+            RingContext::Archival(ring) => RingHash::from_output::<D>(ring.consensus_hash::<D>()),
         }
     }
 }
