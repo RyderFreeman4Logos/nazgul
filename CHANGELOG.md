@@ -1,3 +1,12 @@
+0fdcc5e06a1bedd8a4619695235840b2282f5aba
+### Refactor: RingHash derivation helper
+
+Centralized the "digest output → 32-byte RingHash" conversion into `RingHash::from_output`.
+
+*   **Motivation**: The project needs a stable 32-byte identifier for rings (`RingHash`), while the signing hash (`H`) is typically 64 bytes. Several call sites were duplicating the same truncate/zero-pad logic. Duplicating that logic is easy to get subtly wrong and makes it harder to change the convention later.
+*   **Change**: Introduced `RingHash::from_output` and reused it in `RingContext::consensus_hash` and `ContextualBLSAG` hash verification/creation paths.
+*   **Design note**: This makes the convention explicit: `RingHash` is defined as the first 32 bytes of the chosen digest output (zero-padded if shorter).
+
 9fbe2987cfb84e05e024d49608c7037ec0636513
 ### Fix: wasm build gating
 
