@@ -1,4 +1,4 @@
-cargo_home := ".cargo-local"
+cargo_home := "$(git rev-parse --show-toplevel)/.cargo-local"
 
 
 # Default recipe
@@ -12,38 +12,39 @@ test: test-default test-serde test-no-std
 
 # Run default feature tests
 test-default:
-  CARGO_HOME={{cargo_home}} cargo test --verbose
+    CARGO_HOME={{cargo_home}} cargo test --verbose
 
 # Run serde tests
 test-serde:
-  CARGO_HOME={{cargo_home}} cargo test --features serde-derive --verbose
+    CARGO_HOME={{cargo_home}} cargo test --features serde-derive --verbose
 
 # Run no_std tests
 test-no-std:
-  CARGO_HOME={{cargo_home}} cargo test --no-default-features --features no_std --verbose
+    CARGO_HOME={{cargo_home}} cargo test --no-default-features --features no_std --verbose
 
 # Check formatting
 check-fmt:
-  CARGO_HOME={{cargo_home}} cargo fmt
+    CARGO_HOME={{cargo_home}} cargo fmt
+    git add -A
 
 # Run all clippy checks
 clippy: clippy-default clippy-no-std clippy-serde
 
 # Run clippy
 clippy-default:
-  CARGO_HOME={{cargo_home}} cargo clippy -- -D warnings
+    CARGO_HOME={{cargo_home}} cargo clippy -- -D warnings
 
 # Run clippy on no_std
 clippy-no-std:
-  CARGO_HOME={{cargo_home}} cargo clippy --no-default-features --features no_std -- -D warnings
+    CARGO_HOME={{cargo_home}} cargo clippy --no-default-features --features no_std -- -D warnings
 
 # Run clippy on serde
 clippy-serde:
-  CARGO_HOME={{cargo_home}} cargo clippy --features serde-derive -- -D warnings
+    CARGO_HOME={{cargo_home}} cargo clippy --features serde-derive -- -D warnings
 
 # Run security audit
 audit:
-  CARGO_HOME={{cargo_home}} cargo audit
+    CARGO_HOME={{cargo_home}} cargo audit
 
 check-chinese:
     @echo "Checking for Chinese characters..."
