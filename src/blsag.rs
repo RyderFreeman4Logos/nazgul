@@ -712,6 +712,234 @@ impl BLSAG {
         })
     }
 
+    /// Signs a message with progress reporting via callback.
+    ///
+    /// Identical to [`sign_with_rng`](BLSAG::sign_with_rng) but fires `progress`
+    /// approximately every 10% of ring members (minimum every member for small rings).
+    /// The callback receives `(completed_members, total_members)`.
+    ///
+    /// # WASM adaptation
+    ///
+    /// For wasm-bindgen targets, wrap the Rust closure in a `wasm_bindgen::closure::Closure`
+    /// and pass it from JS. Keep in mind that each call crosses the JS/WASM boundary,
+    /// so the chunked firing (not per-iteration) is intentional for performance.
+    #[cfg(feature = "progress-callback")]
+    pub fn sign_with_rng_and_progress<
+        H: Digest<OutputSize = U64> + Clone + Default,
+        R: CryptoRng + RngCore,
+    >(
+        k: Scalar,
+        ring: &Ring,
+        precomputed_data: Option<&PreparedRing>,
+        message: &[u8],
+        rng: &mut R,
+        mut progress: impl FnMut(usize, usize),
+    ) -> Result<BLSAG, SignatureError> {
+        let ring_members = ring.members();
+
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+
+        let secret_index = ring_members
+            .binary_search_by_key(&k_point.compress().to_bytes(), |p| p.compress().to_bytes())
+            .map_err(|_| SignatureError::SignerNotFound)?;
+
+        let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k);
+
+        let n = ring_members.len();
+
+        if let Some(d) = precomputed_data {
+            if d.ring_hash() != ring.canonical_hash() {
+                return Err(SignatureError::RingMismatch);
+            }
+            if d.hashed_points().len() != n {
+                return Err(SignatureError::InvalidPrecomputedData);
+            }
+        }
+
+        let a: Scalar = Scalar::random(rng);
+        let mut rs: Vec<Scalar> = (0..n).map(|_| Scalar::random(rng)).collect();
+
+        let mut message_hash = H::default();
+        message_hash.update(message);
+
+        let mut h = message_hash.clone();
+        h.update(
+            (a * constants::RISTRETTO_BASEPOINT_POINT)
+                .compress()
+                .as_bytes(),
+        );
+        h.update(
+            (a * RistrettoPoint::from_hash(
+                H::default().chain_update(k_point.compress().as_bytes()),
+            ))
+            .compress()
+            .as_bytes(),
+        );
+
+        let c_plus_1 = Scalar::from_hash(h);
+
+        let mut current_challenge = c_plus_1;
+        let mut c_0 = if secret_index == n - 1 {
+            c_plus_1
+        } else {
+            Scalar::ZERO
+        };
+
+        // Progress reporting: fire approximately every 10% of ring members.
+        let loop_len = n - 1;
+        let chunk = progress_chunk_size(loop_len);
+
+        #[cfg(feature = "optimized-msm")]
+        {
+            let ki_table = VartimeRistrettoPrecomputation::new([key_image]);
+
+            for (step, (i, ring_member)) in ring_members
+                .iter()
+                .enumerate()
+                .cycle()
+                .skip(secret_index + 1)
+                .take(loop_len)
+                .enumerate()
+            {
+                let next_challenge = hash_ring_member_optimized::<H>(
+                    &message_hash,
+                    rs[i],
+                    current_challenge,
+                    *ring_member,
+                    &ki_table,
+                    precomputed_data.map(|d| d.hashed_points()[i]),
+                );
+
+                current_challenge = next_challenge;
+
+                if i == n - 1 {
+                    c_0 = current_challenge;
+                }
+
+                if (step + 1) % chunk == 0 || step + 1 == loop_len {
+                    progress(step + 1, loop_len);
+                }
+            }
+        }
+
+        #[cfg(not(feature = "optimized-msm"))]
+        {
+            for (step, (i, ring_member)) in ring_members
+                .iter()
+                .enumerate()
+                .cycle()
+                .skip(secret_index + 1)
+                .take(loop_len)
+                .enumerate()
+            {
+                let next_challenge = hash_ring_member_components::<H>(
+                    &message_hash,
+                    rs[i],
+                    current_challenge,
+                    *ring_member,
+                    key_image,
+                    precomputed_data.map(|d| d.hashed_points()[i]),
+                );
+
+                current_challenge = next_challenge;
+
+                if i == n - 1 {
+                    c_0 = current_challenge;
+                }
+
+                if (step + 1) % chunk == 0 || step + 1 == loop_len {
+                    progress(step + 1, loop_len);
+                }
+            }
+        }
+
+        rs[secret_index] = a - (current_challenge * k);
+
+        Ok(BLSAG {
+            challenge: c_0,
+            responses: rs,
+            key_image,
+        })
+    }
+
+    /// Verifies a signature with progress reporting via callback.
+    ///
+    /// Identical to [`verify`](BLSAG::verify) but fires `progress` approximately
+    /// every 10% of ring members. The callback receives `(completed_members, total_members)`.
+    ///
+    /// # WASM adaptation
+    ///
+    /// See [`sign_with_rng_and_progress`](BLSAG::sign_with_rng_and_progress) for notes
+    /// on wasm-bindgen closure wrappers. The chunked callback firing reduces
+    /// WASM/JS boundary crossing overhead.
+    #[cfg(feature = "progress-callback")]
+    pub fn verify_with_progress<H: Digest<OutputSize = U64> + Clone + Default>(
+        signature: &BLSAG,
+        ring: &Ring,
+        precomputed_data: Option<&PreparedRing>,
+        message: &[u8],
+        mut progress: impl FnMut(usize, usize),
+    ) -> bool {
+        let mut reconstructed_c: Scalar = signature.challenge;
+        let message_hash = H::default().chain_update(message);
+        let ring_members = ring.members();
+
+        let n = ring_members.len();
+        if signature.responses.len() != n {
+            return false;
+        }
+        if let Some(d) = precomputed_data {
+            if d.ring_hash() != ring.canonical_hash() {
+                return false;
+            }
+            if d.hashed_points().len() != n {
+                return false;
+            }
+        }
+
+        let chunk = progress_chunk_size(n);
+
+        #[cfg(feature = "optimized-msm")]
+        {
+            let ki_table = VartimeRistrettoPrecomputation::new([signature.key_image]);
+
+            for (j, ring_member) in ring_members.iter().enumerate() {
+                reconstructed_c = hash_ring_member_optimized::<H>(
+                    &message_hash,
+                    signature.responses[j],
+                    reconstructed_c,
+                    *ring_member,
+                    &ki_table,
+                    precomputed_data.map(|d| d.hashed_points()[j]),
+                );
+
+                if (j + 1) % chunk == 0 || j + 1 == n {
+                    progress(j + 1, n);
+                }
+            }
+        }
+
+        #[cfg(not(feature = "optimized-msm"))]
+        {
+            for (j, ring_member) in ring_members.iter().enumerate() {
+                reconstructed_c = hash_ring_member_components::<H>(
+                    &message_hash,
+                    signature.responses[j],
+                    reconstructed_c,
+                    *ring_member,
+                    signature.key_image,
+                    precomputed_data.map(|d| d.hashed_points()[j]),
+                );
+
+                if (j + 1) % chunk == 0 || j + 1 == n {
+                    progress(j + 1, n);
+                }
+            }
+        }
+
+        signature.challenge == reconstructed_c
+    }
+
     /// Generates a fake BLSAG signature for testing purposes.
     ///
     /// The generated signature is structurally valid (contains valid points and scalars)
@@ -808,6 +1036,12 @@ fn hash_ring_member_optimized<H: Digest<OutputSize = U64> + Clone + Default>(
             .as_bytes(),
     );
     Scalar::from_hash(h)
+}
+
+/// Compute the chunk size for progress callbacks: ~10% of total, minimum 1.
+#[cfg(feature = "progress-callback")]
+fn progress_chunk_size(total: usize) -> usize {
+    (total / 10).max(1)
 }
 
 impl KeyImageGen<Scalar, RistrettoPoint> for BLSAG {
@@ -1246,5 +1480,72 @@ mod test {
         let sig_2 = BLSAG::sign_precomputed::<Sha512>(precomp_2, &ring_2, None, b"msg2").unwrap();
 
         assert!(BLSAG::link(&sig_1, &sig_2));
+    }
+
+    #[cfg(feature = "progress-callback")]
+    #[test]
+    fn blsag_progress_callback_fires_during_sign_and_verify() {
+        use core::cell::Cell;
+
+        let mut csprng = OsRng::default();
+        let k: Scalar = Scalar::random(&mut csprng);
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+        let n = 20;
+        let mut public_keys: Vec<RistrettoPoint> = (0..(n - 1))
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        public_keys.push(k_point);
+        let ring = Ring::new(public_keys);
+        let message = b"progress callback test";
+
+        // Track sign progress calls
+        let sign_calls = Cell::new(0usize);
+        let sign_last_current = Cell::new(0usize);
+        let sign_last_total = Cell::new(0usize);
+
+        let signature = BLSAG::sign_with_rng_and_progress::<Sha512, _>(
+            k,
+            &ring,
+            None,
+            message,
+            &mut csprng,
+            |current, total| {
+                sign_calls.set(sign_calls.get() + 1);
+                sign_last_current.set(current);
+                sign_last_total.set(total);
+            },
+        )
+        .unwrap();
+
+        assert!(
+            sign_calls.get() > 0,
+            "sign progress must fire at least once"
+        );
+        // The last call must report completion (current == total).
+        assert_eq!(sign_last_current.get(), sign_last_total.get());
+
+        // Track verify progress calls
+        let verify_calls = Cell::new(0usize);
+        let verify_last_current = Cell::new(0usize);
+        let verify_last_total = Cell::new(0usize);
+
+        let valid = BLSAG::verify_with_progress::<Sha512>(
+            &signature,
+            &ring,
+            None,
+            message,
+            |current, total| {
+                verify_calls.set(verify_calls.get() + 1);
+                verify_last_current.set(current);
+                verify_last_total.set(total);
+            },
+        );
+
+        assert!(valid, "signature must verify correctly");
+        assert!(
+            verify_calls.get() > 0,
+            "verify progress must fire at least once"
+        );
+        assert_eq!(verify_last_current.get(), verify_last_total.get());
     }
 }
