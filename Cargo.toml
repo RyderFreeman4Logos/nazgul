@@ -37,7 +37,7 @@ criterion = "0.5"
 
 [features]
 default = ["std", "serde-derive"]
-serde-derive = ["serde", "curve25519-dalek/serde"]
+serde-derive = ["serde", "curve25519-dalek/serde", "no_std"]
 std = [
     "digest/std",
     "rand_core/std",

@@ -38,12 +38,7 @@ pub mod clsag;
 pub mod error;
 pub mod keypair;
 pub mod mlsag;
-#[cfg(not(feature = "no_std"))]
-#[cfg(all(
-    not(feature = "no_std"),
-    not(feature = "wasm"),
-    not(target_arch = "wasm32"),
-))]
+#[cfg(all(feature = "std", not(feature = "wasm"), not(target_arch = "wasm32"),))]
 pub mod pow;
 pub(crate) mod prelude;
 pub mod ring;
