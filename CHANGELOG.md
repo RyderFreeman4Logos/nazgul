@@ -5,7 +5,7 @@ Summary of all breaking changes introduced during Phase 0 development.
 *   **`serde-derive` feature now pulls in `no_std`**: The `serde-derive` feature compiles without `std` by default.
 *   **`pow` module requires `std` feature explicitly**: The proof-of-work module is now gated behind the `std` feature flag.
 *   **`consensus_hash` renamed to `canonical_hash`**: Uses a fixed Sha3-512 digest internally; no longer generic over the hash function.
-*   **`PrecomputedRingData` now binds to ring identity (`RingHash`)**: Precomputed data carries the ring hash it was computed for.
+*   **`PreparedRing` now binds to ring identity (`RingHash`)**: Precomputed data carries the ring hash it was computed for.
 *   **`sign`/`verify` check ring identity on precomputed data**: Signing and verification reject precomputed data whose `RingHash` does not match the ring.
 *   **New `SignatureError::RingMismatch` variant**: Returned when precomputed ring data does not match the ring being used.
 *   **`SignatureError` is now `#[non_exhaustive]`**: Downstream `match` statements must include a wildcard arm.

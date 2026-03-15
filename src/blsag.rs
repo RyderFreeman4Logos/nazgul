@@ -56,7 +56,7 @@
 //! ```
 
 use crate::prelude::*;
-use crate::ring::{PrecomputedRingData, Ring, RingContext, RingHash};
+use crate::ring::{PreparedRing, Ring, RingContext, RingHash};
 use crate::traits::{KeyImageGen, LinkRef, SignRef, VerifyRef};
 use curve25519_dalek::constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
@@ -109,7 +109,7 @@ impl ContextualBLSAG {
     >(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PrecomputedRingData>,
+        precomputed_data: Option<&PreparedRing>,
         message: &[u8],
     ) -> Result<Self, SignatureError> {
         let signature = BLSAG::sign::<H, CSPRNG>(k, ring, precomputed_data, message)?;
@@ -128,7 +128,7 @@ impl ContextualBLSAG {
     >(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PrecomputedRingData>,
+        precomputed_data: Option<&PreparedRing>,
         message: &[u8],
     ) -> Result<Self, SignatureError> {
         let signature = BLSAG::sign::<H, CSPRNG>(k, ring, precomputed_data, message)?;
@@ -171,7 +171,7 @@ impl ContextualBLSAG {
     pub fn verify<H: Digest<OutputSize = U64> + Clone + Default>(
         &self,
         external_ring: Option<&Ring>,
-        precomputed_data: Option<&PrecomputedRingData>,
+        precomputed_data: Option<&PreparedRing>,
         message: &[u8],
     ) -> bool {
         match &self.context {
@@ -399,7 +399,7 @@ impl BLSAG {
     pub fn sign_with_rng<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PrecomputedRingData>,
+        precomputed_data: Option<&PreparedRing>,
         message: &[u8],
         rng: &mut R,
     ) -> Result<BLSAG, SignatureError> {
@@ -537,7 +537,7 @@ impl BLSAG {
     >(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PrecomputedRingData>,
+        precomputed_data: Option<&PreparedRing>,
         rng: &mut R,
     ) -> Result<SigningPrecomputation, SignatureError> {
         let ring_members = ring.members();
@@ -593,7 +593,7 @@ impl BLSAG {
     pub fn sign_precomputed<H: Digest<OutputSize = U64> + Clone + Default>(
         precomp: SigningPrecomputation,
         ring: &Ring,
-        precomputed_data: Option<&PrecomputedRingData>,
+        precomputed_data: Option<&PreparedRing>,
         message: &[u8],
     ) -> Result<BLSAG, SignatureError> {
         if precomp.ring_hash != ring.canonical_hash() {
@@ -834,7 +834,7 @@ impl SignRef<Scalar> for BLSAG {
     >(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PrecomputedRingData>,
+        precomputed_data: Option<&PreparedRing>,
         message: &[u8],
     ) -> Result<BLSAG, SignatureError> {
         let mut csprng = CSPRNG::default();
@@ -847,7 +847,7 @@ impl VerifyRef for BLSAG {
     fn verify<H: Digest<OutputSize = U64> + Clone + Default>(
         signature: &BLSAG,
         ring: &Ring,
-        precomputed_data: Option<&PrecomputedRingData>,
+        precomputed_data: Option<&PreparedRing>,
         message: &[u8],
     ) -> bool {
         let mut reconstructed_c: Scalar = signature.challenge;

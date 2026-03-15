@@ -90,20 +90,20 @@ impl RingContext {
     }
 }
 
-/// Represents pre-computed data for a `Ring` to accelerate cryptographic operations.
+/// A prepared (pre-computed) form of a [`Ring`] that accelerates cryptographic operations.
 ///
 /// This structure holds the results of hashing each public key in the ring onto the curve,
-/// along with the canonical `RingHash` of the ring it was computed from. The `ring_hash`
-/// is checked during signing and verification to ensure the precomputed data matches
+/// along with the canonical [`RingHash`] of the ring it was computed from. The `ring_hash`
+/// is checked during signing and verification to ensure the prepared data matches
 /// the ring being used.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct PrecomputedRingData {
+pub struct PreparedRing {
     ring_hash: RingHash,
     hashed_points: Vec<RistrettoPoint>,
 }
 
-impl PrecomputedRingData {
+impl PreparedRing {
     /// Returns a slice of the pre-computed hashed points.
     pub fn hashed_points(&self) -> &[RistrettoPoint] {
         &self.hashed_points
@@ -112,6 +112,15 @@ impl PrecomputedRingData {
     /// Returns the canonical hash of the ring this data was computed from.
     pub fn ring_hash(&self) -> RingHash {
         self.ring_hash
+    }
+
+    /// Returns `true` if this prepared data was computed from the given ring.
+    ///
+    /// This is a fast O(1) check that compares the stored `ring_hash` against
+    /// the ring's current canonical hash. It does **not** re-derive the hashed
+    /// points — use [`verify`](Self::verify) for a full cryptographic check.
+    pub fn is_valid_for(&self, ring: &Ring) -> bool {
+        self.ring_hash == ring.canonical_hash()
     }
 
     /// Verifies that the pre-computed data is valid for the given `Ring`.
@@ -192,7 +201,7 @@ impl Ring {
     /// regardless of the order in which keys were originally provided to `Ring::new()`.
     ///
     /// This is useful for:
-    /// 1.  **Caching**: Using the hash as a key to retrieve `PrecomputedRingData`.
+    /// 1.  **Caching**: Using the hash as a key to retrieve a [`PreparedRing`].
     /// 2.  **Versioning**: Tracking changes to dynamic rings in an event-sourced system.
     /// 3.  **Integrity**: Verifying that a transmitted ring matches the expected definition.
     ///
@@ -218,16 +227,16 @@ impl Ring {
     /// Performs the pre-computation step for this ring.
     ///
     /// This iterates through all public keys in the ring, hashes them to a point on
-    /// the curve, and returns a `PrecomputedRingData` object containing the results
-    /// along with the ring's canonical hash. This object can then be used to accelerate
+    /// the curve, and returns a [`PreparedRing`] containing the results along with
+    /// the ring's canonical hash. The prepared data can then be reused to accelerate
     /// future signing and verification operations.
-    pub fn precompute<H: Digest<OutputSize = U64> + Clone + Default>(&self) -> PrecomputedRingData {
+    pub fn precompute<H: Digest<OutputSize = U64> + Clone + Default>(&self) -> PreparedRing {
         let hashed_points = self
             .members
             .iter()
             .map(|p| RistrettoPoint::from_hash(H::default().chain_update(p.compress().to_bytes())))
             .collect();
-        PrecomputedRingData {
+        PreparedRing {
             ring_hash: self.canonical_hash(),
             hashed_points,
         }
