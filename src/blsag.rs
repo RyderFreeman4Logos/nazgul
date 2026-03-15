@@ -306,6 +306,41 @@ impl ContextualBLSAG {
 /// println!("{:?}", precomp); // ERROR: Debug is not implemented
 /// ```
 ///
+/// ## Not `Serialize`
+///
+/// Serialization would allow persisting secret nonce material, enabling nonce
+/// reuse across sessions.
+///
+/// ```compile_fail
+/// use nazgul::blsag::{BLSAG, SigningPrecomputation};
+/// use nazgul::keypair::KeyPair;
+/// use nazgul::ring::Ring;
+/// use rand_core::OsRng;
+/// use sha2::Sha512;
+///
+/// fn requires_serialize<T: serde::Serialize>(_v: &T) {}
+///
+/// let mut rng = OsRng;
+/// let kp = KeyPair::generate(&mut rng);
+/// let k = *kp.secret().unwrap();
+/// let ring = Ring::new(vec![*kp.public()]);
+/// let precomp = BLSAG::precompute_signing::<Sha512, _>(k, &ring, None, &mut rng).unwrap();
+/// requires_serialize(&precomp); // ERROR: Serialize is not implemented
+/// ```
+///
+/// ## Not `Deserialize`
+///
+/// Deserialization would allow reconstructing secret nonce material from
+/// untrusted input, enabling nonce reuse.
+///
+/// ```compile_fail
+/// use nazgul::blsag::SigningPrecomputation;
+///
+/// fn requires_deserialize<'de, T: serde::Deserialize<'de>>() {}
+///
+/// requires_deserialize::<SigningPrecomputation>(); // ERROR: Deserialize is not implemented
+/// ```
+///
 /// ## Move-consumed by `sign_precomputed`
 ///
 /// After calling `sign_precomputed`, the precomputation is consumed and cannot
