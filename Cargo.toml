@@ -34,6 +34,7 @@ blake2 = { version = "^0.10", default-features = false }
 rand = { version = "^0.8", default-features = false, features = ["getrandom"] }
 serde_json = "1.0"
 criterion = "0.5"
+rand_chacha = "0.3"
 
 [features]
 default = ["std", "serde-derive"]

@@ -224,6 +224,22 @@ impl BLSAG {
         &self.key_image
     }
 
+    /// Constructs a `BLSAG` from its raw components.
+    ///
+    /// Intended for testing (e.g., tamper-rejection tests) where individual
+    /// fields need to be modified independently.
+    pub fn from_parts(
+        challenge: Scalar,
+        responses: Vec<Scalar>,
+        key_image: RistrettoPoint,
+    ) -> Self {
+        Self {
+            challenge,
+            responses,
+            key_image,
+        }
+    }
+
     /// Signs a message using an externally provided RNG.
     ///
     /// This is the core signing implementation. It accepts `k` (your private key), `ring`
