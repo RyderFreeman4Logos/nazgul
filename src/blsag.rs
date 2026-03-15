@@ -63,6 +63,7 @@ use curve25519_dalek::ristretto::RistrettoPoint;
 #[cfg(feature = "optimized-msm")]
 use curve25519_dalek::ristretto::VartimeRistrettoPrecomputation;
 use curve25519_dalek::scalar::Scalar;
+#[cfg(any(not(feature = "optimized-msm"), test))]
 use curve25519_dalek::traits::VartimeMultiscalarMul;
 #[cfg(feature = "optimized-msm")]
 use curve25519_dalek::traits::VartimePrecomputedMultiscalarMul;
@@ -316,29 +317,57 @@ impl BLSAG {
         // We iterate starting from the member *after* the signer (secret_index + 1).
         // We wrap around using cycle() and stop after processing n - 1 members.
         // The last member processed will be the one *before* the signer (secret_index - 1).
-        for (i, ring_member) in ring_members
-            .iter()
-            .enumerate()
-            .cycle()
-            .skip(secret_index + 1)
-            .take(n - 1)
+        #[cfg(feature = "optimized-msm")]
         {
-            let next_challenge = hash_ring_member_components(
-                &message_hash,
-                rs[i],
-                current_challenge,
-                *ring_member,
-                key_image,
-                precomputed_data.map(|d| d.hashed_points()[i]),
-            );
+            let ki_table = VartimeRistrettoPrecomputation::new([key_image]);
 
-            current_challenge = next_challenge;
+            for (i, ring_member) in ring_members
+                .iter()
+                .enumerate()
+                .cycle()
+                .skip(secret_index + 1)
+                .take(n - 1)
+            {
+                let next_challenge = hash_ring_member_optimized::<H>(
+                    &message_hash,
+                    rs[i],
+                    current_challenge,
+                    *ring_member,
+                    &ki_table,
+                    precomputed_data.map(|d| d.hashed_points()[i]),
+                );
 
-            // If we just computed the challenge for index 0, save it.
-            // In the loop logic, `next_challenge` corresponds to c_{i+1}.
-            // So if we are at index n-1, we just computed c_0.
-            if i == n - 1 {
-                c_0 = current_challenge;
+                current_challenge = next_challenge;
+
+                if i == n - 1 {
+                    c_0 = current_challenge;
+                }
+            }
+        }
+
+        #[cfg(not(feature = "optimized-msm"))]
+        {
+            for (i, ring_member) in ring_members
+                .iter()
+                .enumerate()
+                .cycle()
+                .skip(secret_index + 1)
+                .take(n - 1)
+            {
+                let next_challenge = hash_ring_member_components::<H>(
+                    &message_hash,
+                    rs[i],
+                    current_challenge,
+                    *ring_member,
+                    key_image,
+                    precomputed_data.map(|d| d.hashed_points()[i]),
+                );
+
+                current_challenge = next_challenge;
+
+                if i == n - 1 {
+                    c_0 = current_challenge;
+                }
             }
         }
 
@@ -379,6 +408,7 @@ impl BLSAG {
 
 /// Private helper function to perform the core cryptographic hashing used in both
 /// signing and verification. This prevents code duplication.
+#[cfg(any(not(feature = "optimized-msm"), test))]
 fn hash_ring_member_components<H: Digest<OutputSize = U64> + Clone + Default>(
     message_hash: &H,
     response: Scalar,
