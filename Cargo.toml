@@ -37,7 +37,8 @@ criterion = "0.5"
 rand_chacha = "0.3"
 
 [features]
-default = ["std", "serde-derive"]
+default = ["std", "serde-derive", "optimized-msm"]
+optimized-msm = ["curve25519-dalek/alloc"]
 serde-derive = ["serde", "curve25519-dalek/serde", "no_std"]
 std = [
     "digest/std",

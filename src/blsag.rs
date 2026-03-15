@@ -60,8 +60,12 @@ use crate::ring::{PrecomputedRingData, Ring, RingContext};
 use crate::traits::{KeyImageGen, LinkRef, SignRef, VerifyRef};
 use curve25519_dalek::constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
+#[cfg(feature = "optimized-msm")]
+use curve25519_dalek::ristretto::VartimeRistrettoPrecomputation;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::VartimeMultiscalarMul;
+#[cfg(feature = "optimized-msm")]
+use curve25519_dalek::traits::VartimePrecomputedMultiscalarMul;
 use digest::generic_array::typenum::U64;
 use digest::Digest;
 use rand_core::{CryptoRng, RngCore};
@@ -405,6 +409,46 @@ fn hash_ring_member_components<H: Digest<OutputSize = U64> + Clone + Default>(
     Scalar::from_hash(h)
 }
 
+/// Optimized hash helper using specialized MSM routines.
+///
+/// For L: uses `vartime_double_scalar_mul_basepoint` (2-scalar with known basepoint).
+/// For R: uses precomputed key_image table with `vartime_mixed_multiscalar_mul`.
+#[cfg(feature = "optimized-msm")]
+fn hash_ring_member_optimized<H: Digest<OutputSize = U64> + Clone + Default>(
+    message_hash: &H,
+    response: Scalar,
+    challenge: Scalar,
+    public_key: RistrettoPoint,
+    key_image_table: &VartimeRistrettoPrecomputation,
+    precomputed_pk_hash: Option<RistrettoPoint>,
+) -> Scalar {
+    let mut h = message_hash.clone();
+
+    // L = response * G + challenge * public_key
+    // vartime_double_scalar_mul_basepoint(a, A, b) = a*A + b*G
+    h.update(
+        RistrettoPoint::vartime_double_scalar_mul_basepoint(&challenge, &public_key, &response)
+            .compress()
+            .as_bytes(),
+    );
+
+    let pk_hash = precomputed_pk_hash.unwrap_or_else(|| {
+        RistrettoPoint::from_hash(H::default().chain_update(public_key.compress().as_bytes()))
+    });
+
+    // R = response * H_p(P) + challenge * key_image
+    // vartime_mixed_multiscalar_mul(static_scalars, dynamic_scalars, dynamic_points)
+    // where static_scalars correspond to the precomputed points (key_image),
+    // and dynamic_scalars/points are for non-precomputed points (pk_hash).
+    h.update(
+        key_image_table
+            .vartime_mixed_multiscalar_mul(&[challenge], &[response], &[pk_hash])
+            .compress()
+            .as_bytes(),
+    );
+    Scalar::from_hash(h)
+}
+
 impl KeyImageGen<Scalar, RistrettoPoint> for BLSAG {
     /// Some signature schemes require the key images to be signed as well.
     /// Use this method to generate them
@@ -463,15 +507,35 @@ impl VerifyRef for BLSAG {
             }
         }
 
-        for (j, ring_member) in ring_members.iter().enumerate() {
-            reconstructed_c = hash_ring_member_components(
-                &message_hash,
-                signature.responses[j],
-                reconstructed_c,
-                *ring_member,
-                signature.key_image,
-                precomputed_data.map(|d| d.hashed_points()[j]),
-            );
+        #[cfg(feature = "optimized-msm")]
+        {
+            // Precompute key_image table once before the loop.
+            let ki_table = VartimeRistrettoPrecomputation::new([signature.key_image]);
+
+            for (j, ring_member) in ring_members.iter().enumerate() {
+                reconstructed_c = hash_ring_member_optimized::<H>(
+                    &message_hash,
+                    signature.responses[j],
+                    reconstructed_c,
+                    *ring_member,
+                    &ki_table,
+                    precomputed_data.map(|d| d.hashed_points()[j]),
+                );
+            }
+        }
+
+        #[cfg(not(feature = "optimized-msm"))]
+        {
+            for (j, ring_member) in ring_members.iter().enumerate() {
+                reconstructed_c = hash_ring_member_components::<H>(
+                    &message_hash,
+                    signature.responses[j],
+                    reconstructed_c,
+                    *ring_member,
+                    signature.key_image,
+                    precomputed_data.map(|d| d.hashed_points()[j]),
+                );
+            }
         }
 
         signature.challenge == reconstructed_c
@@ -490,6 +554,7 @@ impl LinkRef for BLSAG {
 mod test {
     extern crate blake2;
     extern crate rand;
+    extern crate rand_chacha;
     extern crate sha2;
     extern crate sha3;
 
@@ -616,6 +681,78 @@ mod test {
         let err = BLSAG::sign::<Sha512, OsRng>(k, &ring_b, Some(&precomp_small), &message)
             .expect_err("expected RingMismatch error");
         assert_eq!(err, SignatureError::RingMismatch);
+    }
+
+    /// Cross-validates that the optimized MSM path produces identical results
+    /// to the generic `vartime_multiscalar_mul` path. Signs with a seeded RNG,
+    /// then verifies that both hash helpers yield the same challenge chain.
+    #[cfg(feature = "optimized-msm")]
+    #[test]
+    fn blsag_optimized_msm_cross_validation() {
+        use rand_chacha::ChaCha20Rng;
+        use rand_core::SeedableRng;
+
+        let mut rng = ChaCha20Rng::seed_from_u64(0xDEAD_BEEF);
+        let k: Scalar = Scalar::random(&mut rng);
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+
+        let n = 5;
+        let mut public_keys: Vec<RistrettoPoint> = (0..(n - 1))
+            .map(|_| RistrettoPoint::random(&mut rng))
+            .collect();
+        public_keys.push(k_point);
+        let ring = Ring::new(public_keys);
+
+        let message = b"cross-validation test message";
+
+        // Sign with deterministic RNG
+        let mut sign_rng = ChaCha20Rng::seed_from_u64(0xCAFE);
+        let signature =
+            BLSAG::sign_with_rng::<Sha512, _>(k, &ring, None, message, &mut sign_rng).unwrap();
+
+        // Standard verify (uses optimized path via the trait)
+        let valid = BLSAG::verify::<Sha512>(&signature, &ring, None, message);
+        assert!(valid, "optimized MSM verify must accept valid signature");
+
+        // Manually run the generic path and compare challenge chains
+        let message_hash = Sha512::default().chain_update(message);
+        let ring_members = ring.members();
+        let ki_table = VartimeRistrettoPrecomputation::new([signature.key_image]);
+
+        let mut c_generic = signature.challenge;
+        let mut c_optimized = signature.challenge;
+
+        for (j, ring_member) in ring_members.iter().enumerate() {
+            c_generic = hash_ring_member_components::<Sha512>(
+                &message_hash,
+                signature.responses[j],
+                c_generic,
+                *ring_member,
+                signature.key_image,
+                None,
+            );
+            c_optimized = hash_ring_member_optimized::<Sha512>(
+                &message_hash,
+                signature.responses[j],
+                c_optimized,
+                *ring_member,
+                &ki_table,
+                None,
+            );
+            assert_eq!(
+                c_generic, c_optimized,
+                "challenge mismatch at ring index {j}"
+            );
+        }
+
+        assert_eq!(
+            c_generic, signature.challenge,
+            "generic path must close the ring"
+        );
+        assert_eq!(
+            c_optimized, signature.challenge,
+            "optimized path must close the ring"
+        );
     }
 
     #[test]
