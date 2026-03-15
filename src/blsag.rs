@@ -84,6 +84,16 @@ pub struct ContextualBLSAG {
 }
 
 impl ContextualBLSAG {
+    /// Returns a reference to the inner BLSAG signature.
+    pub fn signature(&self) -> &BLSAG {
+        &self.signature
+    }
+
+    /// Returns a reference to the ring context.
+    pub fn context(&self) -> &RingContext {
+        &self.context
+    }
+
     /// Signs a message and stores only the Ring's canonical hash (Compact mode).
     ///
     /// Use this when you expect the verifier to have access to the Ring definition.
@@ -199,8 +209,19 @@ pub struct BLSAG {
 }
 
 impl BLSAG {
-    pub fn key_image(&self) -> RistrettoPoint {
-        self.key_image
+    /// Returns a reference to the initial challenge scalar (`c_0`).
+    pub fn challenge(&self) -> &Scalar {
+        &self.challenge
+    }
+
+    /// Returns the response scalars as a slice.
+    pub fn responses(&self) -> &[Scalar] {
+        &self.responses
+    }
+
+    /// Returns a reference to the key image point.
+    pub fn key_image(&self) -> &RistrettoPoint {
+        &self.key_image
     }
 
     /// Signs a message using an externally provided RNG.
