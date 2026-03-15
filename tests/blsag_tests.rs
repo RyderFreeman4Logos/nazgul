@@ -449,3 +449,130 @@ fn verify_fails_with_wrong_key_image() {
         "Verification must fail with a wrong key image"
     );
 }
+
+// ==============
+// SIGNING PRECOMPUTATION TESTS
+// ==============
+
+#[test]
+fn precomputed_signing_cross_validates_with_standard_verify() {
+    let mut csprng = OsRng;
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
+    let num_decoys = 10;
+
+    let mut public_keys = generate_ring(&mut csprng, num_decoys);
+    public_keys.push(signer_public_key);
+    let ring = Ring::new(public_keys);
+
+    // Phase 1: precompute (message-independent)
+    let precomp =
+        BLSAG::precompute_signing::<Sha512, _>(signer_private_key, &ring, None, &mut csprng)
+            .unwrap();
+
+    // Phase 2: sign with message
+    let signature = BLSAG::sign_precomputed::<Sha512>(precomp, &ring, None, MESSAGE).unwrap();
+
+    // Phase 3: standard verify must accept the signature
+    assert!(
+        BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE),
+        "Standard verify must accept a signature produced via precomputed signing"
+    );
+
+    // Also verify with precomputed ring data
+    let ring_data = ring.precompute::<Sha512>();
+    assert!(
+        BLSAG::verify::<Sha512>(&signature, &ring, Some(&ring_data), MESSAGE),
+        "Verify with precomputed ring data must also accept the signature"
+    );
+}
+
+#[test]
+fn precomputed_signing_rejects_ring_mismatch() {
+    let mut csprng = OsRng;
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
+
+    // Ring A: used for precomputation
+    let mut public_keys_a = generate_ring(&mut csprng, 5);
+    public_keys_a.push(signer_public_key);
+    let ring_a = Ring::new(public_keys_a);
+
+    // Ring B: different ring (signer is still present, but different decoys)
+    let mut public_keys_b = generate_ring(&mut csprng, 5);
+    public_keys_b.push(signer_public_key);
+    let ring_b = Ring::new(public_keys_b);
+
+    // Precompute with ring A
+    let precomp =
+        BLSAG::precompute_signing::<Sha512, _>(signer_private_key, &ring_a, None, &mut csprng)
+            .unwrap();
+
+    // Attempt to sign with ring B -> must fail with RingMismatch
+    let err = BLSAG::sign_precomputed::<Sha512>(precomp, &ring_b, None, MESSAGE)
+        .expect_err("sign_precomputed must reject a ring that differs from precomputation");
+    assert_eq!(err, SignatureError::RingMismatch);
+}
+
+#[test]
+fn precomputed_signing_with_ring_data_cross_validates() {
+    let mut csprng = OsRng;
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
+    let num_decoys = 8;
+
+    let mut public_keys = generate_ring(&mut csprng, num_decoys);
+    public_keys.push(signer_public_key);
+    let ring = Ring::new(public_keys);
+    let ring_data = ring.precompute::<Sha512>();
+
+    // Precompute with ring data
+    let precomp = BLSAG::precompute_signing::<Sha512, _>(
+        signer_private_key,
+        &ring,
+        Some(&ring_data),
+        &mut csprng,
+    )
+    .unwrap();
+
+    // Sign with ring data
+    let signature =
+        BLSAG::sign_precomputed::<Sha512>(precomp, &ring, Some(&ring_data), MESSAGE).unwrap();
+
+    // Verify without ring data (most strict cross-validation)
+    assert!(
+        BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE),
+        "Signature from precomputed path with ring data must verify without ring data"
+    );
+}
+
+#[test]
+fn precomputed_signing_linkability() {
+    let mut csprng = OsRng;
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
+
+    // Two different rings, same signer
+    let mut pks_1 = generate_ring(&mut csprng, 4);
+    pks_1.push(signer_public_key);
+    let ring_1 = Ring::new(pks_1);
+
+    let mut pks_2 = generate_ring(&mut csprng, 6);
+    pks_2.push(signer_public_key);
+    let ring_2 = Ring::new(pks_2);
+
+    let precomp_1 =
+        BLSAG::precompute_signing::<Sha512, _>(signer_private_key, &ring_1, None, &mut csprng)
+            .unwrap();
+    let sig_1 = BLSAG::sign_precomputed::<Sha512>(precomp_1, &ring_1, None, b"message 1").unwrap();
+
+    let precomp_2 =
+        BLSAG::precompute_signing::<Sha512, _>(signer_private_key, &ring_2, None, &mut csprng)
+            .unwrap();
+    let sig_2 = BLSAG::sign_precomputed::<Sha512>(precomp_2, &ring_2, None, b"message 2").unwrap();
+
+    assert!(
+        BLSAG::link(&sig_1, &sig_2),
+        "Precomputed signatures from the same signer must be linkable"
+    );
+}
