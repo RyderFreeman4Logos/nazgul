@@ -179,13 +179,23 @@ enum RingRepr {
 ///   `Ring::from_compressed()`. This state uses ~50% less memory but requires
 ///   explicit decompression before signing or verification.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "serde",
-    serde(try_from = "Vec<RistrettoPoint>", into = "Vec<RistrettoPoint>")
-)]
 pub struct Ring {
     repr: RingRepr,
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for Ring {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.compressed_members().serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Ring {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let compressed = Vec::<CompressedRistretto>::deserialize(deserializer)?;
+        Ok(Ring::from_compressed(compressed))
+    }
 }
 
 impl From<Vec<RistrettoPoint>> for Ring {

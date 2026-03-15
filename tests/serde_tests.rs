@@ -109,7 +109,7 @@ fn test_mlsag_serde() {
 }
 
 #[test]
-fn test_ring_serde_and_hash() {
+fn test_ring_serde_compressed_roundtrip() {
     let mut csprng = OsRng;
     let n = 5;
     let public_keys: Vec<RistrettoPoint> = (0..n)
@@ -119,38 +119,62 @@ fn test_ring_serde_and_hash() {
     let ring = Ring::new(public_keys.clone());
     let original_hash = ring.canonical_hash();
 
-    // Test Serialization
+    // Serialize (always outputs compressed format)
     let serialized = serde_json::to_string(&ring).expect("Failed to serialize ring");
 
-    // Test Deserialization
+    // Deserialize produces Compressed variant
     let deserialized_ring: Ring =
         serde_json::from_str(&serialized).expect("Failed to deserialize ring");
-    let deserialized_hash = deserialized_ring.canonical_hash();
 
-    // 1. Hashes must match
+    // Deserialized ring is in Compressed state
+    assert!(
+        !deserialized_ring.is_decompressed(),
+        "Deserialized ring should be in Compressed state"
+    );
+
+    // Canonical hash is preserved even in Compressed state
     assert_eq!(
-        original_hash, deserialized_hash,
+        original_hash,
+        deserialized_ring.canonical_hash(),
         "Hash mismatch after serde roundtrip"
     );
 
-    // 2. Members must match (implies sorting was preserved/restored)
+    // After decompress(), ring is Full and usable
+    let decompressed_ring = deserialized_ring
+        .decompress()
+        .expect("Decompression failed");
+    assert!(decompressed_ring.is_decompressed());
+    assert_eq!(
+        original_hash,
+        decompressed_ring.canonical_hash(),
+        "Hash mismatch after decompress"
+    );
     assert_eq!(
         ring.members(),
-        deserialized_ring.members(),
-        "Members mismatch after serde roundtrip"
+        decompressed_ring.members(),
+        "Members mismatch after serde roundtrip + decompress"
     );
+}
 
-    // 3. Test Consensus Hash Determinism (different order input)
-    let mut shuffled_keys = public_keys.clone();
-    // Simple manual swap to change order if n >= 2
-    if n >= 2 {
-        shuffled_keys.swap(0, 1);
-    }
+#[test]
+fn test_ring_serde_consensus_hash_determinism() {
+    let mut csprng = OsRng;
+    let n = 5;
+    let public_keys: Vec<RistrettoPoint> = (0..n)
+        .map(|_| RistrettoPoint::random(&mut csprng))
+        .collect();
+
+    let ring = Ring::new(public_keys.clone());
+    let original_hash = ring.canonical_hash();
+
+    // Different order input produces the same hash
+    let mut shuffled_keys = public_keys;
+    shuffled_keys.swap(0, 1);
     let ring_shuffled = Ring::new(shuffled_keys);
-    let shuffled_hash = ring_shuffled.canonical_hash();
 
     assert_eq!(
-        original_hash, shuffled_hash,
+        original_hash,
+        ring_shuffled.canonical_hash(),
         "Consensus hash should be deterministic regardless of input order"
     );
 }

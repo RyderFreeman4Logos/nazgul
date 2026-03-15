@@ -194,7 +194,18 @@ impl ContextualBLSAG {
                     }
                 }
 
-                BLSAG::verify::<H>(&self.signature, internal_ring, precomputed_data, message)
+                // After deserialization the ring may be in Compressed state;
+                // decompress transparently so callers don't have to.
+                if internal_ring.is_decompressed() {
+                    BLSAG::verify::<H>(&self.signature, internal_ring, precomputed_data, message)
+                } else {
+                    match internal_ring.clone().decompress() {
+                        Ok(ring) => {
+                            BLSAG::verify::<H>(&self.signature, &ring, precomputed_data, message)
+                        }
+                        Err(_) => false,
+                    }
+                }
             }
         }
     }
