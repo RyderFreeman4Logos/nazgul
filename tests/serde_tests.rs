@@ -1,9 +1,10 @@
 #![cfg(feature = "serde-derive")]
 
-use nazgul::blsag::BLSAG;
+use nazgul::blsag::{ContextualBLSAG, BLSAG};
 use nazgul::clsag::CLSAG;
+use nazgul::keypair::KeyPair;
 use nazgul::mlsag::MLSAG;
-use nazgul::ring::Ring;
+use nazgul::ring::{Ring, RingContext};
 use nazgul::sag::SAG;
 use nazgul::traits::{Sign, SignRef, Verify, VerifyRef};
 
@@ -176,5 +177,84 @@ fn test_ring_serde_consensus_hash_determinism() {
         original_hash,
         ring_shuffled.canonical_hash(),
         "Consensus hash should be deterministic regardless of input order"
+    );
+}
+
+#[test]
+fn contextual_blsag_archival_verify_after_serde_roundtrip() {
+    let mut csprng = OsRng;
+    let signer = KeyPair::generate(&mut csprng);
+    let mut public_keys: Vec<RistrettoPoint> = (0..4)
+        .map(|_| *KeyPair::generate(&mut csprng).public())
+        .collect();
+    public_keys.push(*signer.public());
+    let ring = Ring::new(public_keys);
+    let message = b"Archival auto-decompress after serde";
+
+    // Sign in Archival mode (stores full ring)
+    let sig = ContextualBLSAG::sign_archival::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
+
+    // Serde roundtrip — ring inside Archival context becomes Compressed
+    let json = serde_json::to_string(&sig).unwrap();
+    let deserialized: ContextualBLSAG = serde_json::from_str(&json).unwrap();
+
+    // Confirm the internal ring is now in Compressed state
+    match &deserialized.context {
+        RingContext::Archival(r) => assert!(
+            !r.is_decompressed(),
+            "Internal ring should be Compressed after serde roundtrip"
+        ),
+        _ => panic!("Expected Archival context after deserialization"),
+    }
+
+    // verify() should auto-decompress and succeed without caller intervention
+    assert!(
+        deserialized.verify::<Sha512>(None, None, message),
+        "Archival verify must auto-decompress after serde roundtrip"
+    );
+}
+
+#[test]
+fn contextual_blsag_compact_verify_after_serde_roundtrip() {
+    let mut csprng = OsRng;
+    let signer = KeyPair::generate(&mut csprng);
+    let mut public_keys: Vec<RistrettoPoint> = (0..4)
+        .map(|_| *KeyPair::generate(&mut csprng).public())
+        .collect();
+    public_keys.push(*signer.public());
+    let ring = Ring::new(public_keys);
+    let message = b"Compact auto-decompress after serde";
+
+    // Sign in Compact mode (stores only hash)
+    let sig = ContextualBLSAG::sign_compact::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
+
+    // Serde roundtrip for the signature
+    let sig_json = serde_json::to_string(&sig).unwrap();
+    let deserialized_sig: ContextualBLSAG = serde_json::from_str(&sig_json).unwrap();
+
+    // Serde roundtrip for the external ring — becomes Compressed
+    let ring_json = serde_json::to_string(&ring).unwrap();
+    let deserialized_ring: Ring = serde_json::from_str(&ring_json).unwrap();
+    assert!(
+        !deserialized_ring.is_decompressed(),
+        "External ring should be Compressed after serde roundtrip"
+    );
+
+    // verify() should auto-decompress the external ring and succeed
+    assert!(
+        deserialized_sig.verify::<Sha512>(Some(&deserialized_ring), None, message),
+        "Compact verify must auto-decompress external ring after serde roundtrip"
     );
 }
