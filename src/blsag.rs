@@ -454,7 +454,7 @@ impl BLSAG {
             }
         }
 
-        let a: Scalar = Scalar::random(rng);
+        let a = SecretScalar(Scalar::random(rng));
 
         let mut rs: Vec<Scalar> = (0..n).map(|_| Scalar::random(rng)).collect();
 
@@ -464,12 +464,12 @@ impl BLSAG {
 
         let mut h = message_hash.clone();
         h.update(
-            (a * constants::RISTRETTO_BASEPOINT_POINT)
+            (a.0 * constants::RISTRETTO_BASEPOINT_POINT)
                 .compress()
                 .as_bytes(),
         );
         h.update(
-            (a * RistrettoPoint::from_hash(
+            (a.0 * RistrettoPoint::from_hash(
                 H::default().chain_update(k_point.compress().as_bytes()),
             ))
             .compress()
@@ -543,7 +543,7 @@ impl BLSAG {
         }
 
         // After the loop, `current_challenge` holds the challenge for the signer (c_{secret_index}).
-        rs[secret_index] = a - (current_challenge * k);
+        rs[secret_index] = a.0 - (current_challenge * k);
 
         Ok(BLSAG {
             challenge: c_0,
@@ -793,7 +793,7 @@ impl BLSAG {
             }
         }
 
-        let a: Scalar = Scalar::random(rng);
+        let a = SecretScalar(Scalar::random(rng));
         let mut rs: Vec<Scalar> = (0..n).map(|_| Scalar::random(rng)).collect();
 
         let mut message_hash = H::default();
@@ -801,12 +801,12 @@ impl BLSAG {
 
         let mut h = message_hash.clone();
         h.update(
-            (a * constants::RISTRETTO_BASEPOINT_POINT)
+            (a.0 * constants::RISTRETTO_BASEPOINT_POINT)
                 .compress()
                 .as_bytes(),
         );
         h.update(
-            (a * RistrettoPoint::from_hash(
+            (a.0 * RistrettoPoint::from_hash(
                 H::default().chain_update(k_point.compress().as_bytes()),
             ))
             .compress()
@@ -890,7 +890,7 @@ impl BLSAG {
             }
         }
 
-        rs[secret_index] = a - (current_challenge * k);
+        rs[secret_index] = a.0 - (current_challenge * k);
 
         Ok(BLSAG {
             challenge: c_0,
