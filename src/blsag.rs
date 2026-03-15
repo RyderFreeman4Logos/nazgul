@@ -232,6 +232,111 @@ impl BLSAG {
         self.key_image
     }
 
+    /// Signs a message using an externally provided RNG.
+    ///
+    /// This is the core signing implementation. It accepts `k` (your private key), `ring`
+    /// (the public keys of all ring members including yourself), optional `precomputed_data`,
+    /// the `message` to sign, and an external `rng` source.
+    ///
+    /// Providing an external RNG enables deterministic signature generation when used with
+    /// a seeded RNG, which is useful for testing and reproducibility.
+    pub fn sign_with_rng<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>(
+        k: Scalar,
+        ring: &Ring,
+        precomputed_data: Option<&PrecomputedRingData>,
+        message: &[u8],
+        rng: &mut R,
+    ) -> Result<BLSAG, SignatureError> {
+        let ring_members = ring.members();
+
+        // Provers public key
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+
+        let secret_index = ring_members
+            .binary_search_by_key(&k_point.compress().to_bytes(), |p| p.compress().to_bytes())
+            .map_err(|_| SignatureError::SignerNotFound)?;
+
+        let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k);
+
+        let n = ring_members.len();
+
+        // If precomputed data is provided, ensure its length matches the ring size to prevent out-of-bounds access.
+        if let Some(d) = precomputed_data {
+            if d.hashed_points().len() != n {
+                return Err(SignatureError::InvalidPrecomputedData);
+            }
+        }
+
+        let a: Scalar = Scalar::random(rng);
+
+        let mut rs: Vec<Scalar> = (0..n).map(|_| Scalar::random(rng)).collect();
+
+        // Hash of message is shared by all challenges H_n(m, ....)
+        let mut message_hash = H::default();
+        message_hash.update(message);
+
+        let mut h = message_hash.clone();
+        h.update(
+            (a * constants::RISTRETTO_BASEPOINT_POINT)
+                .compress()
+                .as_bytes(),
+        );
+        h.update(
+            (a * RistrettoPoint::from_hash(
+                H::default().chain_update(k_point.compress().as_bytes()),
+            ))
+            .compress()
+            .as_bytes(),
+        );
+
+        let c_plus_1 = Scalar::from_hash(h);
+
+        let mut current_challenge = c_plus_1;
+        let mut c_0 = if secret_index == n - 1 {
+            c_plus_1
+        } else {
+            Scalar::ZERO
+        };
+
+        // We iterate starting from the member *after* the signer (secret_index + 1).
+        // We wrap around using cycle() and stop after processing n - 1 members.
+        // The last member processed will be the one *before* the signer (secret_index - 1).
+        for (i, ring_member) in ring_members
+            .iter()
+            .enumerate()
+            .cycle()
+            .skip(secret_index + 1)
+            .take(n - 1)
+        {
+            let next_challenge = hash_ring_member_components(
+                &message_hash,
+                rs[i],
+                current_challenge,
+                *ring_member,
+                key_image,
+                precomputed_data.map(|d| d.hashed_points()[i]),
+            );
+
+            current_challenge = next_challenge;
+
+            // If we just computed the challenge for index 0, save it.
+            // In the loop logic, `next_challenge` corresponds to c_{i+1}.
+            // So if we are at index n-1, we just computed c_0.
+            if i == n - 1 {
+                c_0 = current_challenge;
+            }
+        }
+
+        // After the loop, `current_challenge` holds the challenge for the signer (c_{secret_index}).
+        rs[secret_index] = a - (current_challenge * k);
+
+        Ok(BLSAG {
+            challenge: c_0,
+            responses: rs,
+            key_image,
+        })
+    }
+
     /// Generates a fake BLSAG signature for testing purposes.
     ///
     /// The generated signature is structurally valid (contains valid points and scalars)
@@ -317,94 +422,7 @@ impl SignRef<Scalar> for BLSAG {
         message: &[u8],
     ) -> Result<BLSAG, SignatureError> {
         let mut csprng = CSPRNG::default();
-        let ring_members = ring.members();
-
-        // Provers public key
-        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
-
-        let secret_index = ring_members
-            .binary_search_by_key(&k_point.compress().to_bytes(), |p| p.compress().to_bytes())
-            .map_err(|_| SignatureError::SignerNotFound)?;
-
-        let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k);
-
-        let n = ring_members.len();
-
-        // If precomputed data is provided, ensure its length matches the ring size to prevent out-of-bounds access.
-        if let Some(d) = precomputed_data {
-            if d.hashed_points().len() != n {
-                return Err(SignatureError::InvalidPrecomputedData);
-            }
-        }
-
-        let a: Scalar = Scalar::random(&mut csprng);
-
-        let mut rs: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut csprng)).collect();
-
-        // Hash of message is shared by all challenges H_n(m, ....)
-        let mut message_hash = H::default();
-        message_hash.update(message);
-
-        let mut h = message_hash.clone();
-        h.update(
-            (a * constants::RISTRETTO_BASEPOINT_POINT)
-                .compress()
-                .as_bytes(),
-        );
-        h.update(
-            (a * RistrettoPoint::from_hash(
-                H::default().chain_update(k_point.compress().as_bytes()),
-            ))
-            .compress()
-            .as_bytes(),
-        );
-
-        let c_plus_1 = Scalar::from_hash(h);
-
-        let mut current_challenge = c_plus_1;
-        let mut c_0 = if secret_index == n - 1 {
-            c_plus_1
-        } else {
-            Scalar::ZERO
-        };
-
-        // We iterate starting from the member *after* the signer (secret_index + 1).
-        // We wrap around using cycle() and stop after processing n - 1 members.
-        // The last member processed will be the one *before* the signer (secret_index - 1).
-        for (i, ring_member) in ring_members
-            .iter()
-            .enumerate()
-            .cycle()
-            .skip(secret_index + 1)
-            .take(n - 1)
-        {
-            let next_challenge = hash_ring_member_components(
-                &message_hash,
-                rs[i],
-                current_challenge,
-                *ring_member,
-                key_image,
-                precomputed_data.map(|d| d.hashed_points()[i]),
-            );
-
-            current_challenge = next_challenge;
-
-            // If we just computed the challenge for index 0, save it.
-            // In the loop logic, `next_challenge` corresponds to c_{i+1}.
-            // So if we are at index n-1, we just computed c_0.
-            if i == n - 1 {
-                c_0 = current_challenge;
-            }
-        }
-
-        // After the loop, `current_challenge` holds the challenge for the signer (c_{secret_index}).
-        rs[secret_index] = a - (current_challenge * k);
-
-        Ok(BLSAG {
-            challenge: c_0,
-            responses: rs,
-            key_image,
-        })
+        BLSAG::sign_with_rng::<H, CSPRNG>(k, ring, precomputed_data, message, &mut csprng)
     }
 }
 
