@@ -609,6 +609,141 @@ mod tests {
         assert_eq!(ring.members(), expected.members());
     }
 
+    // --- RingHash consistency tests across Full/Compressed representations ---
+
+    #[test]
+    fn canonical_hash_consistent_across_reprs_shuffled_input() {
+        // Same members given in different order produce the same canonical hash
+        let points = sample_points();
+        let reversed: Vec<RistrettoPoint> = points.iter().rev().copied().collect();
+
+        let ring_a = Ring::new(points.clone());
+        let ring_b = Ring::new(reversed);
+
+        assert_eq!(ring_a.canonical_hash(), ring_b.canonical_hash());
+    }
+
+    #[test]
+    fn canonical_hash_full_eq_compressed_shuffled_input() {
+        // Full ring and Compressed ring from the same members (different insertion order)
+        // must produce identical canonical hashes.
+        let points = sample_points();
+        let reversed: Vec<RistrettoPoint> = points.iter().rev().copied().collect();
+        let compressed_reversed: Vec<CompressedRistretto> =
+            reversed.iter().map(|p| p.compress()).collect();
+
+        let full_ring = Ring::new(points);
+        let compressed_ring = Ring::from_compressed(compressed_reversed);
+
+        assert_eq!(full_ring.canonical_hash(), compressed_ring.canonical_hash());
+    }
+
+    #[test]
+    fn sort_consistency_full_vs_compressed() {
+        // Verify that compressed_members() returns identical slices for both repr paths.
+        let points = sample_points();
+        let compressed_keys: Vec<CompressedRistretto> =
+            points.iter().map(|p| p.compress()).collect();
+
+        let full_ring = Ring::new(points);
+        let compressed_ring = Ring::from_compressed(compressed_keys);
+
+        assert_eq!(
+            full_ring.compressed_members(),
+            compressed_ring.compressed_members(),
+            "Sort order must be identical across Full and Compressed representations"
+        );
+    }
+
+    #[test]
+    fn decompress_members_match_full_ring() {
+        // After from_compressed → decompress(), members() must return the same
+        // decompressed points as Ring::new() with the same member set.
+        let points = sample_points();
+        let compressed_keys: Vec<CompressedRistretto> =
+            points.iter().map(|p| p.compress()).collect();
+
+        let full_ring = Ring::new(points);
+        let decompressed_ring = Ring::from_compressed(compressed_keys).decompress().unwrap();
+
+        assert_eq!(
+            full_ring.members(),
+            decompressed_ring.members(),
+            "Decompressed members must match Full ring members"
+        );
+    }
+
+    #[test]
+    fn single_member_ring_hash_consistency() {
+        // Edge case: ring with exactly one member
+        let point = RistrettoPoint::from_hash(Sha3_512::new().chain_update(b"single"));
+        let compressed = vec![point.compress()];
+
+        let full_ring = Ring::new(vec![point]);
+        let compressed_ring = Ring::from_compressed(compressed);
+
+        assert_eq!(full_ring.canonical_hash(), compressed_ring.canonical_hash());
+        assert_eq!(full_ring.len(), 1);
+        assert_eq!(compressed_ring.len(), 1);
+
+        let decompressed = compressed_ring.decompress().unwrap();
+        assert_eq!(full_ring.members(), decompressed.members());
+    }
+
+    #[test]
+    fn large_ring_hash_consistency() {
+        // Edge case: ring with 25 members
+        let points: Vec<RistrettoPoint> = (0..25u64)
+            .map(|i| {
+                RistrettoPoint::from_hash(
+                    Sha3_512::new().chain_update(format!("member-{}", i).as_bytes()),
+                )
+            })
+            .collect();
+
+        let compressed_keys: Vec<CompressedRistretto> =
+            points.iter().map(|p| p.compress()).collect();
+
+        let full_ring = Ring::new(points);
+        let compressed_ring = Ring::from_compressed(compressed_keys);
+
+        assert_eq!(
+            full_ring.canonical_hash(),
+            compressed_ring.canonical_hash(),
+            "Large ring (25 members) must have consistent hash across representations"
+        );
+        assert_eq!(
+            full_ring.compressed_members(),
+            compressed_ring.compressed_members(),
+            "Large ring sort order must be identical"
+        );
+
+        let decompressed = compressed_ring.decompress().unwrap();
+        assert_eq!(full_ring.members(), decompressed.members());
+    }
+
+    #[test]
+    fn prepared_ring_valid_for_decompressed_from_compressed() {
+        // PreparedRing from a Full ring should also validate against the
+        // equivalent decompressed-from-compressed ring (same canonical hash).
+        let points = sample_points();
+        let compressed_keys: Vec<CompressedRistretto> =
+            points.iter().map(|p| p.compress()).collect();
+
+        let full_ring = Ring::new(points);
+        let prepared = full_ring.precompute::<Sha3_512>();
+
+        let decompressed = Ring::from_compressed(compressed_keys).decompress().unwrap();
+        assert!(
+            prepared.is_valid_for(&decompressed),
+            "PreparedRing from Full must be valid for equivalent decompressed ring"
+        );
+        assert!(
+            prepared.verify::<Sha3_512>(&decompressed),
+            "PreparedRing full verify must pass against equivalent decompressed ring"
+        );
+    }
+
     #[test]
     fn decompression_failure_returns_error() {
         // Create an invalid compressed point (all 0xFF bytes is not a valid Ristretto point)
