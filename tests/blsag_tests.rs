@@ -547,6 +547,72 @@ fn precomputed_signing_with_ring_data_cross_validates() {
 }
 
 #[test]
+fn blsag_sign_rejects_same_size_different_members_precomputed() {
+    // Regression: PreparedRing rejection must not rely on length alone.
+    // Two rings of identical size but with entirely different members must
+    // produce different canonical hashes, triggering RingMismatch.
+    let mut csprng = OsRng;
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
+    let num_decoys = 10;
+
+    // Ring A: signer + 10 random decoys
+    let mut public_keys_a = generate_ring(&mut csprng, num_decoys);
+    public_keys_a.push(signer_public_key);
+    let ring_a = Ring::new(public_keys_a);
+
+    // Ring B: signer + 10 *different* random decoys (same size)
+    let mut public_keys_b = generate_ring(&mut csprng, num_decoys);
+    public_keys_b.push(signer_public_key);
+    let ring_b = Ring::new(public_keys_b);
+
+    // Precompute for ring A
+    let precomp_a = ring_a.precompute::<Sha512>();
+
+    // Sign with ring B but ring A's PreparedRing -> must fail with RingMismatch
+    let err = BLSAG::sign_with_rng::<Sha512, OsRng>(
+        signer_private_key,
+        &ring_b,
+        Some(&precomp_a),
+        MESSAGE,
+        &mut csprng,
+    )
+    .expect_err("sign_with_rng must reject same-size ring with different members");
+    assert_eq!(err, SignatureError::RingMismatch);
+}
+
+#[test]
+fn blsag_verify_rejects_same_size_different_members_precomputed() {
+    // Verify must reject a PreparedRing whose canonical hash does not match
+    // the ring being verified, even when both rings are the same size.
+    let mut csprng = OsRng;
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
+    let num_decoys = 10;
+
+    // Ring A: create valid signature
+    let mut public_keys_a = generate_ring(&mut csprng, num_decoys);
+    public_keys_a.push(signer_public_key);
+    let ring_a = Ring::new(public_keys_a);
+    let precomp_a = ring_a.precompute::<Sha512>();
+
+    let signature =
+        BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring_a, Some(&precomp_a), MESSAGE)
+            .unwrap();
+
+    // Ring B: same size, different members
+    let mut public_keys_b = generate_ring(&mut csprng, num_decoys);
+    public_keys_b.push(signer_public_key);
+    let ring_b = Ring::new(public_keys_b);
+
+    // Verify with ring B + ring A's PreparedRing -> must return false
+    assert!(
+        !BLSAG::verify::<Sha512>(&signature, &ring_b, Some(&precomp_a), MESSAGE),
+        "Verify must reject same-size ring with different members when PreparedRing mismatches"
+    );
+}
+
+#[test]
 fn precomputed_signing_linkability() {
     let mut csprng = OsRng;
     let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
