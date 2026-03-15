@@ -365,6 +365,9 @@ impl Ring {
     /// representation. Duplicate entries are allowed and will be placed according
     /// to their sort order.
     ///
+    /// Any previously computed [`PreparedRing`] will become invalid after this call,
+    /// since the ring's canonical hash changes when members are added.
+    ///
     /// # Panics
     ///
     /// Panics if the ring is in `Compressed` state. Call `decompress()` first.
@@ -377,7 +380,7 @@ impl Ring {
                 *points = sorted.points;
             }
             RingRepr::Compressed(_) => {
-                panic!("Ring must be decompressed before adding keys. Call decompress() first.")
+                panic!("Cannot mutate a compressed ring. Call decompress() first.")
             }
         }
     }
@@ -386,6 +389,9 @@ impl Ring {
     ///
     /// Returns `true` if a matching key was removed, `false` otherwise. The
     /// ring remains sorted after removal.
+    ///
+    /// Any previously computed [`PreparedRing`] will become invalid after this call,
+    /// since the ring's canonical hash changes when members are removed.
     ///
     /// # Panics
     ///
@@ -407,7 +413,7 @@ impl Ring {
                 }
             }
             RingRepr::Compressed(_) => {
-                panic!("Ring must be decompressed before removing keys. Call decompress() first.")
+                panic!("Cannot mutate a compressed ring. Call decompress() first.")
             }
         }
     }
@@ -600,5 +606,49 @@ mod tests {
         let ring = Ring::from_compressed(vec![invalid]);
         let result = ring.decompress();
         assert_eq!(result.unwrap_err(), SignatureError::DecompressionFailed);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot mutate a compressed ring. Call decompress() first.")]
+    fn add_public_key_panics_on_compressed() {
+        let points = sample_points();
+        let compressed: Vec<CompressedRistretto> = points.iter().map(|p| p.compress()).collect();
+        let mut ring = Ring::from_compressed(compressed);
+        ring.add_public_key(points[0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot mutate a compressed ring. Call decompress() first.")]
+    fn remove_public_key_panics_on_compressed() {
+        let points = sample_points();
+        let compressed: Vec<CompressedRistretto> = points.iter().map(|p| p.compress()).collect();
+        let mut ring = Ring::from_compressed(compressed);
+        ring.remove_public_key(points[0]);
+    }
+
+    #[test]
+    fn add_public_key_invalidates_prepared_ring() {
+        let points = sample_points();
+        let mut ring = Ring::new(vec![points[0], points[1]]);
+        let prepared = ring.precompute::<Sha3_512>();
+
+        assert!(prepared.is_valid_for(&ring));
+
+        ring.add_public_key(points[2]);
+
+        assert!(!prepared.is_valid_for(&ring));
+    }
+
+    #[test]
+    fn remove_public_key_invalidates_prepared_ring() {
+        let points = sample_points();
+        let mut ring = Ring::new(points.clone());
+        let prepared = ring.precompute::<Sha3_512>();
+
+        assert!(prepared.is_valid_for(&ring));
+
+        ring.remove_public_key(points[0]);
+
+        assert!(!prepared.is_valid_for(&ring));
     }
 }
