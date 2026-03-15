@@ -56,7 +56,7 @@
 //! ```
 
 use crate::prelude::*;
-use crate::ring::{PrecomputedRingData, Ring, RingContext};
+use crate::ring::{PrecomputedRingData, Ring, RingContext, RingHash};
 use crate::traits::{KeyImageGen, LinkRef, SignRef, VerifyRef};
 use curve25519_dalek::constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
@@ -72,6 +72,7 @@ use digest::Digest;
 use rand_core::{CryptoRng, RngCore};
 #[cfg(feature = "serde-derive")]
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// A wrapper around a BLSAG signature that includes ring context information.
 ///
@@ -198,6 +199,62 @@ impl ContextualBLSAG {
         }
     }
 }
+
+/// Message-independent precomputation for BLSAG signing.
+///
+/// Captures all nonce-derived values (`alpha`, `alpha*G`, `alpha*H_p`) and random
+/// responses so that the actual signing step only needs the message. The struct is
+/// move-consumed by [`BLSAG::sign_precomputed`] and the secret nonce `alpha` is
+/// zeroized on drop.
+///
+/// # Security properties
+///
+/// * **Not `Clone`/`Copy`**: prevents nonce reuse.
+/// * **Not `Debug`/`Serialize`/`Deserialize`**: prevents accidental leakage.
+/// * **`ZeroizeOnDrop`**: secret scalars `alpha` and `secret_key` are erased
+///   from memory when this value is dropped.
+/// * **Ring binding**: stores a `RingHash` that is checked against the ring
+///   supplied to `sign_precomputed` to prevent ring-switching attacks.
+pub struct SigningPrecomputation {
+    /// Secret nonce (zeroized on drop via `SecretScalar`).
+    alpha: SecretScalar,
+    /// `alpha * G` — the nonce commitment on the base point.
+    alpha_g: RistrettoPoint,
+    /// `alpha * H_p(signer_pubkey)` — the nonce commitment on the hash-to-point.
+    alpha_hp: RistrettoPoint,
+    /// Canonical hash of the ring used during precomputation.
+    ring_hash: RingHash,
+    /// Position of the signer's public key in the sorted ring.
+    signer_index: usize,
+    /// Key image (`k * H_p(K)`).
+    key_image: RistrettoPoint,
+    /// Pre-generated random responses for every ring member.
+    responses: Vec<Scalar>,
+    /// The signer's secret key (zeroized on drop via `SecretScalar`).
+    secret_key: SecretScalar,
+}
+
+/// Wrapper around `Scalar` that zeroizes on drop.
+///
+/// `curve25519-dalek::Scalar` implements `Zeroize` when the `zeroize` feature
+/// is enabled, so we delegate directly. The wrapper provides `Drop`-based
+/// automatic zeroization without requiring the parent struct to implement
+/// `Drop` (which would prevent field moves).
+struct SecretScalar(Scalar);
+
+impl Zeroize for SecretScalar {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl Drop for SecretScalar {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for SecretScalar {}
 
 /// Back's Linkable Spontaneous Anonymous Group (bLSAG) signatures
 /// > This an enhanced version of the LSAG algorithm where linkability
@@ -373,6 +430,194 @@ impl BLSAG {
 
         // After the loop, `current_challenge` holds the challenge for the signer (c_{secret_index}).
         rs[secret_index] = a - (current_challenge * k);
+
+        Ok(BLSAG {
+            challenge: c_0,
+            responses: rs,
+            key_image,
+        })
+    }
+
+    /// Creates a message-independent precomputation for later use with
+    /// [`sign_precomputed`](BLSAG::sign_precomputed).
+    ///
+    /// This extracts the nonce generation, nonce commitments, and random
+    /// response vectors out of the signing hot path. The returned
+    /// [`SigningPrecomputation`] is bound to this specific ring via its
+    /// canonical hash and must be consumed (moved) into `sign_precomputed`.
+    pub fn precompute_signing<
+        H: Digest<OutputSize = U64> + Clone + Default,
+        R: CryptoRng + RngCore,
+    >(
+        k: Scalar,
+        ring: &Ring,
+        precomputed_data: Option<&PrecomputedRingData>,
+        rng: &mut R,
+    ) -> Result<SigningPrecomputation, SignatureError> {
+        let ring_members = ring.members();
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+
+        let secret_index = ring_members
+            .binary_search_by_key(&k_point.compress().to_bytes(), |p| p.compress().to_bytes())
+            .map_err(|_| SignatureError::SignerNotFound)?;
+
+        let n = ring_members.len();
+
+        if let Some(d) = precomputed_data {
+            if d.ring_hash() != ring.canonical_hash() {
+                return Err(SignatureError::RingMismatch);
+            }
+            if d.hashed_points().len() != n {
+                return Err(SignatureError::InvalidPrecomputedData);
+            }
+        }
+
+        let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k);
+
+        let alpha = Scalar::random(rng);
+        let alpha_g = alpha * constants::RISTRETTO_BASEPOINT_POINT;
+
+        let hp_signer = precomputed_data
+            .map(|d| d.hashed_points()[secret_index])
+            .unwrap_or_else(|| {
+                RistrettoPoint::from_hash(H::default().chain_update(k_point.compress().as_bytes()))
+            });
+        let alpha_hp = alpha * hp_signer;
+
+        let responses: Vec<Scalar> = (0..n).map(|_| Scalar::random(rng)).collect();
+
+        Ok(SigningPrecomputation {
+            alpha: SecretScalar(alpha),
+            alpha_g,
+            alpha_hp,
+            ring_hash: ring.canonical_hash(),
+            signer_index: secret_index,
+            key_image,
+            responses,
+            secret_key: SecretScalar(k),
+        })
+    }
+
+    /// Completes a BLSAG signature using a previously created
+    /// [`SigningPrecomputation`].
+    ///
+    /// The precomputation is consumed (moved) so the nonce cannot be reused.
+    /// Returns [`SignatureError::RingMismatch`] if the ring's canonical hash
+    /// differs from the one recorded during precomputation.
+    pub fn sign_precomputed<H: Digest<OutputSize = U64> + Clone + Default>(
+        precomp: SigningPrecomputation,
+        ring: &Ring,
+        precomputed_data: Option<&PrecomputedRingData>,
+        message: &[u8],
+    ) -> Result<BLSAG, SignatureError> {
+        if precomp.ring_hash != ring.canonical_hash() {
+            return Err(SignatureError::RingMismatch);
+        }
+
+        let ring_members = ring.members();
+        let n = ring_members.len();
+
+        if precomp.responses.len() != n {
+            return Err(SignatureError::RingMismatch);
+        }
+
+        if let Some(d) = precomputed_data {
+            if d.ring_hash() != ring.canonical_hash() {
+                return Err(SignatureError::RingMismatch);
+            }
+            if d.hashed_points().len() != n {
+                return Err(SignatureError::InvalidPrecomputedData);
+            }
+        }
+
+        // Destructure the precomputation to consume it (SecretScalar fields
+        // are dropped at the end of this scope, zeroizing secrets).
+        let SigningPrecomputation {
+            alpha,
+            alpha_g,
+            alpha_hp,
+            ring_hash: _,
+            signer_index: secret_index,
+            key_image,
+            responses,
+            secret_key,
+        } = precomp;
+        let mut rs = responses;
+
+        // Build the message hash prefix shared by all challenge computations.
+        let mut message_hash = H::default();
+        message_hash.update(message);
+
+        // Compute c_{secret_index + 1} from the precomputed alpha commitments.
+        let mut h = message_hash.clone();
+        h.update(alpha_g.compress().as_bytes());
+        h.update(alpha_hp.compress().as_bytes());
+
+        let c_plus_1 = Scalar::from_hash(h);
+
+        let mut current_challenge = c_plus_1;
+        let mut c_0 = if secret_index == n - 1 {
+            c_plus_1
+        } else {
+            Scalar::ZERO
+        };
+
+        #[cfg(feature = "optimized-msm")]
+        {
+            let ki_table = VartimeRistrettoPrecomputation::new([key_image]);
+
+            for (i, ring_member) in ring_members
+                .iter()
+                .enumerate()
+                .cycle()
+                .skip(secret_index + 1)
+                .take(n - 1)
+            {
+                let next_challenge = hash_ring_member_optimized::<H>(
+                    &message_hash,
+                    rs[i],
+                    current_challenge,
+                    *ring_member,
+                    &ki_table,
+                    precomputed_data.map(|d| d.hashed_points()[i]),
+                );
+
+                current_challenge = next_challenge;
+
+                if i == n - 1 {
+                    c_0 = current_challenge;
+                }
+            }
+        }
+
+        #[cfg(not(feature = "optimized-msm"))]
+        {
+            for (i, ring_member) in ring_members
+                .iter()
+                .enumerate()
+                .cycle()
+                .skip(secret_index + 1)
+                .take(n - 1)
+            {
+                let next_challenge = hash_ring_member_components::<H>(
+                    &message_hash,
+                    rs[i],
+                    current_challenge,
+                    *ring_member,
+                    key_image,
+                    precomputed_data.map(|d| d.hashed_points()[i]),
+                );
+
+                current_challenge = next_challenge;
+
+                if i == n - 1 {
+                    c_0 = current_challenge;
+                }
+            }
+        }
+
+        // Close the ring for the signer's slot.
+        rs[secret_index] = alpha.0 - (current_challenge * secret_key.0);
 
         Ok(BLSAG {
             challenge: c_0,
@@ -809,5 +1054,111 @@ mod test {
         // Verification should not panic; expect false
         let ok = BLSAG::verify::<Sha512>(&sig, &ring_sign, Some(&precomp_other), &message);
         assert!(!ok);
+    }
+
+    #[test]
+    fn blsag_precomputed_sign_verify_roundtrip() {
+        let mut csprng = OsRng::default();
+        let k: Scalar = Scalar::random(&mut csprng);
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+        let n = 5;
+        let mut public_keys: Vec<RistrettoPoint> = (0..(n - 1))
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        public_keys.push(k_point);
+        let ring = Ring::new(public_keys);
+        let message = b"precomputed signing test";
+
+        let precomp = BLSAG::precompute_signing::<Sha512, _>(k, &ring, None, &mut csprng).unwrap();
+        let signature = BLSAG::sign_precomputed::<Sha512>(precomp, &ring, None, message).unwrap();
+
+        assert!(BLSAG::verify::<Sha512>(&signature, &ring, None, message));
+    }
+
+    #[test]
+    fn blsag_precomputed_with_ring_data() {
+        let mut csprng = OsRng::default();
+        let k: Scalar = Scalar::random(&mut csprng);
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+        let n = 4;
+        let mut public_keys: Vec<RistrettoPoint> = (0..(n - 1))
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        public_keys.push(k_point);
+        let ring = Ring::new(public_keys);
+        let precomputed_ring = ring.precompute::<Sha512>();
+        let message = b"precomputed signing with ring data";
+
+        let precomp =
+            BLSAG::precompute_signing::<Sha512, _>(k, &ring, Some(&precomputed_ring), &mut csprng)
+                .unwrap();
+        let signature =
+            BLSAG::sign_precomputed::<Sha512>(precomp, &ring, Some(&precomputed_ring), message)
+                .unwrap();
+
+        assert!(BLSAG::verify::<Sha512>(
+            &signature,
+            &ring,
+            Some(&precomputed_ring),
+            message,
+        ));
+    }
+
+    #[test]
+    fn blsag_precomputed_rejects_ring_mismatch() {
+        let mut csprng = OsRng::default();
+        let k: Scalar = Scalar::random(&mut csprng);
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+
+        // Ring A: used for precomputation
+        let mut public_keys_a: Vec<RistrettoPoint> = (0..3)
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        public_keys_a.push(k_point);
+        let ring_a = Ring::new(public_keys_a);
+
+        // Ring B: different ring used at sign time
+        let mut public_keys_b: Vec<RistrettoPoint> = (0..3)
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        public_keys_b.push(k_point);
+        let ring_b = Ring::new(public_keys_b);
+
+        let precomp =
+            BLSAG::precompute_signing::<Sha512, _>(k, &ring_a, None, &mut csprng).unwrap();
+
+        let err = BLSAG::sign_precomputed::<Sha512>(precomp, &ring_b, None, b"msg")
+            .expect_err("expected RingMismatch");
+        assert_eq!(err, SignatureError::RingMismatch);
+    }
+
+    #[test]
+    fn blsag_precomputed_linkability() {
+        let mut csprng = OsRng::default();
+        let k: Scalar = Scalar::random(&mut csprng);
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+
+        // Two different rings, same signer
+        let mut pks_1: Vec<RistrettoPoint> = (0..3)
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        pks_1.push(k_point);
+        let ring_1 = Ring::new(pks_1);
+
+        let mut pks_2: Vec<RistrettoPoint> = (0..4)
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        pks_2.push(k_point);
+        let ring_2 = Ring::new(pks_2);
+
+        let precomp_1 =
+            BLSAG::precompute_signing::<Sha512, _>(k, &ring_1, None, &mut csprng).unwrap();
+        let sig_1 = BLSAG::sign_precomputed::<Sha512>(precomp_1, &ring_1, None, b"msg1").unwrap();
+
+        let precomp_2 =
+            BLSAG::precompute_signing::<Sha512, _>(k, &ring_2, None, &mut csprng).unwrap();
+        let sig_2 = BLSAG::sign_precomputed::<Sha512>(precomp_2, &ring_2, None, b"msg2").unwrap();
+
+        assert!(BLSAG::link(&sig_1, &sig_2));
     }
 }
