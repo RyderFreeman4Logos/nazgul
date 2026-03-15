@@ -38,7 +38,12 @@ pub mod clsag;
 pub mod error;
 pub mod keypair;
 pub mod mlsag;
-#[cfg(all(feature = "std", not(feature = "wasm"), not(target_arch = "wasm32"),))]
+#[cfg(all(
+    feature = "std",
+    feature = "cpu-time",
+    not(feature = "wasm"),
+    not(target_arch = "wasm32"),
+))]
 pub mod pow;
 pub(crate) mod prelude;
 pub mod ring;
