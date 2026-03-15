@@ -1,5 +1,5 @@
 use crate::error::SignatureError;
-use crate::ring::{PrecomputedRingData, Ring};
+use crate::ring::{PreparedRing, Ring};
 use crate::scalar::RistrettoPoint;
 use anyhow::Result as AResult;
 use digest::{generic_array::typenum::U64, Digest};
@@ -49,7 +49,7 @@ pub trait VerifyRef {
     fn verify<Hash: Digest<OutputSize = U64> + Clone + Default>(
         signature: &Self,
         ring: &Ring,
-        precomputed_data: Option<&PrecomputedRingData>,
+        precomputed_data: Option<&PreparedRing>,
         message: &[u8],
     ) -> bool;
 }
@@ -67,7 +67,7 @@ pub trait SignRef<Secret> {
     >(
         k: Secret,
         ring: &Ring,
-        precomputed_data: Option<&PrecomputedRingData>,
+        precomputed_data: Option<&PreparedRing>,
         message: &[u8],
     ) -> Result<Self, SignatureError>
     where

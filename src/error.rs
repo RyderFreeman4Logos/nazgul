@@ -3,12 +3,20 @@
 /// Represents the possible errors that can occur during signature operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum SignatureError {
     /// Occurs when the signer's public key is not found within the provided ring.
     SignerNotFound,
     /// Provided precomputed ring data is not compatible with the ring in use
     /// (e.g., length mismatch).
     InvalidPrecomputedData,
+    /// The precomputed ring data was computed for a different ring than the one
+    /// being used for signing or verification.
+    RingMismatch,
+    /// One or more compressed points in the ring failed to decompress.
+    DecompressionFailed,
+    /// The ring is in compressed state and must be decompressed before use.
+    CompressedRing,
 }
 
 impl core::fmt::Display for SignatureError {
@@ -19,6 +27,21 @@ impl core::fmt::Display for SignatureError {
             }
             SignatureError::InvalidPrecomputedData => {
                 write!(f, "Invalid precomputed ring data for the given ring")
+            }
+            SignatureError::RingMismatch => {
+                write!(f, "Precomputed ring data was computed for a different ring")
+            }
+            SignatureError::DecompressionFailed => {
+                write!(
+                    f,
+                    "One or more compressed points in the ring failed to decompress"
+                )
+            }
+            SignatureError::CompressedRing => {
+                write!(
+                    f,
+                    "Ring is in compressed state; call decompress() before signing or verifying"
+                )
             }
         }
     }

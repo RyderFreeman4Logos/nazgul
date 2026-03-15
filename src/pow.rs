@@ -5,6 +5,7 @@ use crate::ring::Ring;
 use crate::traits::{SignRef, VerifyRef};
 use cpu_time::ThreadTime;
 use rand::rngs::OsRng;
+#[cfg(feature = "serde-derive")]
 use serde::{Deserialize, Serialize};
 use sha3::Keccak512;
 use std::time::Duration;

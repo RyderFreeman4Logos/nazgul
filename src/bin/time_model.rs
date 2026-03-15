@@ -1,12 +1,20 @@
 #![cfg_attr(
-    any(feature = "wasm", target_arch = "wasm32"),
+    any(feature = "wasm", target_arch = "wasm32", not(feature = "cpu-time")),
     allow(dead_code, unused_imports)
 )]
 
-#[cfg(all(not(feature = "wasm"), not(target_arch = "wasm32")))]
+#[cfg(all(
+    feature = "cpu-time",
+    not(feature = "wasm"),
+    not(target_arch = "wasm32")
+))]
 use nazgul::pow::VerificationCostModel;
 
-#[cfg(all(not(feature = "wasm"), not(target_arch = "wasm32")))]
+#[cfg(all(
+    feature = "cpu-time",
+    not(feature = "wasm"),
+    not(target_arch = "wasm32")
+))]
 fn main() {
     // Generate the hardware-specific performance model by running the heavy benchmark.
     let model = VerificationCostModel::generate_heavy();
@@ -30,7 +38,7 @@ fn main() {
     println!("}} ");
 }
 
-#[cfg(any(feature = "wasm", target_arch = "wasm32"))]
+#[cfg(any(feature = "wasm", target_arch = "wasm32", not(feature = "cpu-time")))]
 fn main() {
     // The time model binary is only meaningful on native targets; provide a no-op for wasm builds.
 }

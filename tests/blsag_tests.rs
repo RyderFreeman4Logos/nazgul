@@ -5,6 +5,9 @@ use nazgul::ring::Ring;
 use nazgul::traits::{LinkRef, SignRef, VerifyRef};
 
 use curve25519_dalek::ristretto::RistrettoPoint;
+use curve25519_dalek::scalar::Scalar;
+use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use rand_core::{CryptoRng, OsRng, RngCore};
 use sha2::Sha512;
 
@@ -196,56 +199,6 @@ fn link_succeeds_for_same_signer_with_different_rings() {
     );
 }
 
-// #[test]
-// fn verify_fails_with_tampered_challenge() {
-//     let mut csprng = OsRng;
-//     let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
-//     let secret_index = 1;
-//     let mut ring = generate_ring(&mut csprng, 3);
-//     ring.insert(secret_index, signer_public_key);
-
-//     let mut signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key.clone(), ring, secret_index, MESSAGE);
-
-//     // Tamper with the challenge
-//     signature.challenge = signature.challenge + Scalar::ONE;
-
-//     assert!(!BLSAG::verify::<Sha512>(&signature, MESSAGE));
-// }
-
-// #[test]
-// fn verify_fails_with_tampered_response() {
-//     let mut csprng = OsRng;
-//     let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
-//     let secret_index = 4;
-//     let mut ring = generate_ring(&mut csprng, 5);
-//     ring.insert(secret_index, signer_public_key);
-
-//     let mut signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key.clone(), ring, secret_index, MESSAGE);
-
-//     // Tamper with one of the responses
-//     signature.responses[2] = signature.responses[2] + Scalar::ONE;
-
-//     assert!(!BLSAG::verify::<Sha512>(&signature, MESSAGE));
-// }
-
-// #[test]
-// fn verify_fails_with_different_ring() {
-//     let mut csprng = OsRng;
-//     let (signer_private_key, signer_public_key) = generate_keypair(&mut csprng);
-//     let secret_index = 2;
-//     let mut ring = generate_ring(&mut csprng, 6);
-//     ring.insert(secret_index, signer_public_key);
-
-//     let mut signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key.clone(), ring, secret_index, MESSAGE);
-
-//     // Create a completely different ring for verification
-//     let mut different_ring = generate_ring(&mut csprng, 6);
-//     different_ring.insert(secret_index, signer_public_key);
-//     signature.ring = different_ring;
-
-//     assert!(!BLSAG::verify::<Sha512>(&signature, MESSAGE));
-// }
-
 #[test]
 fn sign_and_verify_with_precomputation_succeeds() {
     let mut csprng = OsRng;
@@ -303,4 +256,323 @@ fn fake_signature_fails_verification() {
 
     // Verify should fail
     assert!(!BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE));
+}
+
+// Helper: create a deterministic ring + signer from a seeded RNG.
+// Returns (signer_private_key, ring, rng) with the RNG ready for signing.
+fn deterministic_ring_and_signer() -> (Scalar, Ring, ChaCha20Rng) {
+    let mut rng = ChaCha20Rng::seed_from_u64(42);
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut rng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
+    let num_decoys = 3;
+    let mut public_keys = generate_ring(&mut rng, num_decoys);
+    public_keys.push(signer_public_key);
+    let ring = Ring::new(public_keys);
+    (signer_private_key, ring, rng)
+}
+
+// ==============
+// GOLDEN VECTOR TEST
+// ==============
+
+#[test]
+fn golden_vector_deterministic_signature() {
+    let (signer_private_key, ring, mut rng) = deterministic_ring_and_signer();
+
+    let signature = BLSAG::sign_with_rng::<Sha512, ChaCha20Rng>(
+        signer_private_key,
+        &ring,
+        None,
+        MESSAGE,
+        &mut rng,
+    )
+    .unwrap();
+
+    assert!(BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE));
+
+    // Frozen golden values from ChaCha20Rng(seed=42)
+    let expected_challenge: [u8; 32] = [
+        7, 210, 88, 111, 130, 146, 45, 246, 211, 249, 40, 71, 53, 255, 91, 141, 79, 148, 106, 53,
+        238, 53, 9, 63, 66, 86, 237, 24, 199, 162, 47, 15,
+    ];
+    let expected_key_image: [u8; 32] = [
+        178, 28, 233, 188, 154, 108, 58, 91, 230, 6, 43, 125, 204, 142, 66, 74, 121, 72, 176, 86,
+        16, 7, 21, 82, 34, 60, 78, 48, 9, 48, 15, 109,
+    ];
+    let expected_responses: [[u8; 32]; 4] = [
+        [
+            207, 25, 112, 51, 255, 76, 31, 216, 57, 64, 239, 87, 223, 48, 163, 58, 166, 132, 169,
+            203, 71, 179, 61, 170, 12, 34, 148, 228, 14, 131, 210, 2,
+        ],
+        [
+            11, 183, 251, 74, 78, 113, 169, 51, 185, 156, 193, 133, 46, 205, 72, 100, 152, 12, 199,
+            37, 111, 224, 84, 115, 66, 99, 216, 152, 103, 77, 82, 3,
+        ],
+        [
+            150, 87, 253, 166, 65, 77, 200, 50, 202, 215, 12, 63, 176, 82, 150, 200, 206, 202, 59,
+            217, 77, 30, 174, 199, 140, 202, 83, 180, 162, 190, 128, 13,
+        ],
+        [
+            163, 94, 190, 155, 113, 219, 56, 147, 136, 36, 111, 76, 55, 72, 80, 191, 24, 224, 159,
+            239, 227, 248, 180, 57, 229, 36, 0, 52, 165, 242, 223, 3,
+        ],
+    ];
+
+    assert_eq!(
+        signature.challenge().as_bytes(),
+        &expected_challenge,
+        "Challenge mismatch: golden vector regression"
+    );
+    assert_eq!(
+        signature.key_image().compress().as_bytes(),
+        &expected_key_image,
+        "Key image mismatch: golden vector regression"
+    );
+    assert_eq!(signature.responses().len(), 4);
+    for (i, r) in signature.responses().iter().enumerate() {
+        assert_eq!(
+            r.as_bytes(),
+            &expected_responses[i],
+            "Response[{i}] mismatch: golden vector regression"
+        );
+    }
+}
+
+// ==============
+// TAMPER REJECTION TESTS
+// ==============
+
+#[test]
+fn verify_fails_with_tampered_challenge() {
+    let (signer_private_key, ring, mut rng) = deterministic_ring_and_signer();
+
+    let signature = BLSAG::sign_with_rng::<Sha512, ChaCha20Rng>(
+        signer_private_key,
+        &ring,
+        None,
+        MESSAGE,
+        &mut rng,
+    )
+    .unwrap();
+
+    // Tamper: add Scalar::ONE to the challenge
+    let tampered = BLSAG::from_parts(
+        signature.challenge() + Scalar::ONE,
+        signature.responses().to_vec(),
+        *signature.key_image(),
+    );
+
+    assert!(
+        !BLSAG::verify::<Sha512>(&tampered, &ring, None, MESSAGE),
+        "Verification must fail when challenge is tampered"
+    );
+}
+
+#[test]
+fn verify_fails_with_tampered_response() {
+    let (signer_private_key, ring, mut rng) = deterministic_ring_and_signer();
+
+    let signature = BLSAG::sign_with_rng::<Sha512, ChaCha20Rng>(
+        signer_private_key,
+        &ring,
+        None,
+        MESSAGE,
+        &mut rng,
+    )
+    .unwrap();
+
+    // Tamper: mutate one response scalar
+    let mut tampered_responses = signature.responses().to_vec();
+    tampered_responses[1] = tampered_responses[1] + Scalar::ONE;
+
+    let tampered = BLSAG::from_parts(
+        *signature.challenge(),
+        tampered_responses,
+        *signature.key_image(),
+    );
+
+    assert!(
+        !BLSAG::verify::<Sha512>(&tampered, &ring, None, MESSAGE),
+        "Verification must fail when a response is tampered"
+    );
+}
+
+#[test]
+fn verify_fails_with_swapped_ring_member() {
+    let (signer_private_key, ring, mut rng) = deterministic_ring_and_signer();
+
+    let signature = BLSAG::sign_with_rng::<Sha512, ChaCha20Rng>(
+        signer_private_key,
+        &ring,
+        None,
+        MESSAGE,
+        &mut rng,
+    )
+    .unwrap();
+
+    // Create a different ring: replace the first decoy with a random point
+    let mut tampered_members = ring.members().to_vec();
+    let replacement = RistrettoPoint::random(&mut rng);
+    tampered_members[0] = replacement;
+    let tampered_ring = Ring::new(tampered_members);
+
+    assert!(
+        !BLSAG::verify::<Sha512>(&signature, &tampered_ring, None, MESSAGE),
+        "Verification must fail when a ring member is swapped"
+    );
+}
+
+#[test]
+fn verify_fails_with_wrong_key_image() {
+    let (signer_private_key, ring, mut rng) = deterministic_ring_and_signer();
+
+    let signature = BLSAG::sign_with_rng::<Sha512, ChaCha20Rng>(
+        signer_private_key,
+        &ring,
+        None,
+        MESSAGE,
+        &mut rng,
+    )
+    .unwrap();
+
+    // Tamper: use a random point as key image
+    let wrong_key_image = RistrettoPoint::random(&mut rng);
+
+    let tampered = BLSAG::from_parts(
+        *signature.challenge(),
+        signature.responses().to_vec(),
+        wrong_key_image,
+    );
+
+    assert!(
+        !BLSAG::verify::<Sha512>(&tampered, &ring, None, MESSAGE),
+        "Verification must fail with a wrong key image"
+    );
+}
+
+// ==============
+// SIGNING PRECOMPUTATION TESTS
+// ==============
+
+#[test]
+fn precomputed_signing_cross_validates_with_standard_verify() {
+    let mut csprng = OsRng;
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
+    let num_decoys = 10;
+
+    let mut public_keys = generate_ring(&mut csprng, num_decoys);
+    public_keys.push(signer_public_key);
+    let ring = Ring::new(public_keys);
+
+    // Phase 1: precompute (message-independent)
+    let precomp =
+        BLSAG::precompute_signing::<Sha512, _>(signer_private_key, &ring, None, &mut csprng)
+            .unwrap();
+
+    // Phase 2: sign with message
+    let signature = BLSAG::sign_precomputed::<Sha512>(precomp, &ring, None, MESSAGE).unwrap();
+
+    // Phase 3: standard verify must accept the signature
+    assert!(
+        BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE),
+        "Standard verify must accept a signature produced via precomputed signing"
+    );
+
+    // Also verify with precomputed ring data
+    let ring_data = ring.precompute::<Sha512>();
+    assert!(
+        BLSAG::verify::<Sha512>(&signature, &ring, Some(&ring_data), MESSAGE),
+        "Verify with precomputed ring data must also accept the signature"
+    );
+}
+
+#[test]
+fn precomputed_signing_rejects_ring_mismatch() {
+    let mut csprng = OsRng;
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
+
+    // Ring A: used for precomputation
+    let mut public_keys_a = generate_ring(&mut csprng, 5);
+    public_keys_a.push(signer_public_key);
+    let ring_a = Ring::new(public_keys_a);
+
+    // Ring B: different ring (signer is still present, but different decoys)
+    let mut public_keys_b = generate_ring(&mut csprng, 5);
+    public_keys_b.push(signer_public_key);
+    let ring_b = Ring::new(public_keys_b);
+
+    // Precompute with ring A
+    let precomp =
+        BLSAG::precompute_signing::<Sha512, _>(signer_private_key, &ring_a, None, &mut csprng)
+            .unwrap();
+
+    // Attempt to sign with ring B -> must fail with RingMismatch
+    let err = BLSAG::sign_precomputed::<Sha512>(precomp, &ring_b, None, MESSAGE)
+        .expect_err("sign_precomputed must reject a ring that differs from precomputation");
+    assert_eq!(err, SignatureError::RingMismatch);
+}
+
+#[test]
+fn precomputed_signing_with_ring_data_cross_validates() {
+    let mut csprng = OsRng;
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
+    let num_decoys = 8;
+
+    let mut public_keys = generate_ring(&mut csprng, num_decoys);
+    public_keys.push(signer_public_key);
+    let ring = Ring::new(public_keys);
+    let ring_data = ring.precompute::<Sha512>();
+
+    // Precompute with ring data
+    let precomp = BLSAG::precompute_signing::<Sha512, _>(
+        signer_private_key,
+        &ring,
+        Some(&ring_data),
+        &mut csprng,
+    )
+    .unwrap();
+
+    // Sign with ring data
+    let signature =
+        BLSAG::sign_precomputed::<Sha512>(precomp, &ring, Some(&ring_data), MESSAGE).unwrap();
+
+    // Verify without ring data (most strict cross-validation)
+    assert!(
+        BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE),
+        "Signature from precomputed path with ring data must verify without ring data"
+    );
+}
+
+#[test]
+fn precomputed_signing_linkability() {
+    let mut csprng = OsRng;
+    let (signer_private_key, signer_public_key) = KeyPair::generate(&mut csprng).into_keys();
+    let signer_private_key = signer_private_key.unwrap();
+
+    // Two different rings, same signer
+    let mut pks_1 = generate_ring(&mut csprng, 4);
+    pks_1.push(signer_public_key);
+    let ring_1 = Ring::new(pks_1);
+
+    let mut pks_2 = generate_ring(&mut csprng, 6);
+    pks_2.push(signer_public_key);
+    let ring_2 = Ring::new(pks_2);
+
+    let precomp_1 =
+        BLSAG::precompute_signing::<Sha512, _>(signer_private_key, &ring_1, None, &mut csprng)
+            .unwrap();
+    let sig_1 = BLSAG::sign_precomputed::<Sha512>(precomp_1, &ring_1, None, b"message 1").unwrap();
+
+    let precomp_2 =
+        BLSAG::precompute_signing::<Sha512, _>(signer_private_key, &ring_2, None, &mut csprng)
+            .unwrap();
+    let sig_2 = BLSAG::sign_precomputed::<Sha512>(precomp_2, &ring_2, None, b"message 2").unwrap();
+
+    assert!(
+        BLSAG::link(&sig_1, &sig_2),
+        "Precomputed signatures from the same signer must be linkable"
+    );
 }
