@@ -185,7 +185,21 @@ impl ContextualBLSAG {
                     return false;
                 }
 
-                BLSAG::verify::<H>(&self.signature, ring, precomputed_data, message)
+                // After deserialization the external ring may be in Compressed
+                // state; decompress transparently so callers don't have to.
+                if ring.is_decompressed() {
+                    BLSAG::verify::<H>(&self.signature, ring, precomputed_data, message)
+                } else {
+                    match ring.clone().decompress() {
+                        Ok(decompressed) => BLSAG::verify::<H>(
+                            &self.signature,
+                            &decompressed,
+                            precomputed_data,
+                            message,
+                        ),
+                        Err(_) => false,
+                    }
+                }
             }
             RingContext::Archival(internal_ring) => {
                 if let Some(external) = external_ring {
