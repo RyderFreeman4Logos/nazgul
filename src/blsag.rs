@@ -463,12 +463,26 @@ impl BLSAG {
         message: &[u8],
         rng: &mut R,
     ) -> Result<BLSAG, SignatureError> {
+        Self::sign_inner::<H, R>(k, ring, precomputed_data, message, rng, None)
+    }
+
+    /// Shared signing implementation for both `sign_with_rng` and
+    /// `sign_with_rng_and_progress`. When `progress` is `Some`, the callback
+    /// fires approximately every 10% of ring members processed.
+    fn sign_inner<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>(
+        k: Scalar,
+        ring: &Ring,
+        precomputed_data: Option<&PreparedRing>,
+        message: &[u8],
+        rng: &mut R,
+        mut progress: Option<&mut dyn FnMut(usize, usize)>,
+    ) -> Result<BLSAG, SignatureError> {
         if !ring.is_decompressed() {
             return Err(SignatureError::CompressedRing);
         }
         let ring_members = ring.members();
 
-        // Provers public key
+        // Prover's public key
         let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
 
         let secret_index = ring_members
@@ -523,16 +537,20 @@ impl BLSAG {
         // We iterate starting from the member *after* the signer (secret_index + 1).
         // We wrap around using cycle() and stop after processing n - 1 members.
         // The last member processed will be the one *before* the signer (secret_index - 1).
+        let loop_len = n - 1;
+        let chunk = progress_chunk_size(loop_len);
+
         #[cfg(feature = "optimized-msm")]
         {
             let ki_table = VartimeRistrettoPrecomputation::new([key_image]);
 
-            for (i, ring_member) in ring_members
+            for (step, (i, ring_member)) in ring_members
                 .iter()
                 .enumerate()
                 .cycle()
                 .skip(secret_index + 1)
-                .take(n - 1)
+                .take(loop_len)
+                .enumerate()
             {
                 let next_challenge = hash_ring_member_optimized::<H>(
                     &message_hash,
@@ -548,17 +566,24 @@ impl BLSAG {
                 if i == n - 1 {
                     c_0 = current_challenge;
                 }
+
+                if let Some(ref mut cb) = progress {
+                    if (step + 1) % chunk == 0 || step + 1 == loop_len {
+                        cb(step + 1, loop_len);
+                    }
+                }
             }
         }
 
         #[cfg(not(feature = "optimized-msm"))]
         {
-            for (i, ring_member) in ring_members
+            for (step, (i, ring_member)) in ring_members
                 .iter()
                 .enumerate()
                 .cycle()
                 .skip(secret_index + 1)
-                .take(n - 1)
+                .take(loop_len)
+                .enumerate()
             {
                 let next_challenge = hash_ring_member_components::<H>(
                     &message_hash,
@@ -573,6 +598,12 @@ impl BLSAG {
 
                 if i == n - 1 {
                     c_0 = current_challenge;
+                }
+
+                if let Some(ref mut cb) = progress {
+                    if (step + 1) % chunk == 0 || step + 1 == loop_len {
+                        cb(step + 1, loop_len);
+                    }
                 }
             }
         }
@@ -804,134 +835,7 @@ impl BLSAG {
         rng: &mut R,
         mut progress: impl FnMut(usize, usize),
     ) -> Result<BLSAG, SignatureError> {
-        if !ring.is_decompressed() {
-            return Err(SignatureError::CompressedRing);
-        }
-        let ring_members = ring.members();
-
-        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
-
-        let secret_index = ring_members
-            .binary_search_by_key(&k_point.compress().to_bytes(), |p| p.compress().to_bytes())
-            .map_err(|_| SignatureError::SignerNotFound)?;
-
-        let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k);
-
-        let n = ring_members.len();
-
-        if let Some(d) = precomputed_data {
-            if d.ring_hash() != ring.canonical_hash() {
-                return Err(SignatureError::RingMismatch);
-            }
-            if d.hashed_points().len() != n {
-                return Err(SignatureError::InvalidPrecomputedData);
-            }
-        }
-
-        let a = SecretScalar(Scalar::random(rng));
-        let mut rs: Vec<Scalar> = (0..n).map(|_| Scalar::random(rng)).collect();
-
-        let mut message_hash = H::default();
-        message_hash.update(message);
-
-        let mut h = message_hash.clone();
-        h.update(
-            (a.0 * constants::RISTRETTO_BASEPOINT_POINT)
-                .compress()
-                .as_bytes(),
-        );
-        h.update(
-            (a.0 * RistrettoPoint::from_hash(
-                H::default().chain_update(k_point.compress().as_bytes()),
-            ))
-            .compress()
-            .as_bytes(),
-        );
-
-        let c_plus_1 = Scalar::from_hash(h);
-
-        let mut current_challenge = c_plus_1;
-        let mut c_0 = if secret_index == n - 1 {
-            c_plus_1
-        } else {
-            Scalar::ZERO
-        };
-
-        // Progress reporting: fire approximately every 10% of ring members.
-        let loop_len = n - 1;
-        let chunk = progress_chunk_size(loop_len);
-
-        #[cfg(feature = "optimized-msm")]
-        {
-            let ki_table = VartimeRistrettoPrecomputation::new([key_image]);
-
-            for (step, (i, ring_member)) in ring_members
-                .iter()
-                .enumerate()
-                .cycle()
-                .skip(secret_index + 1)
-                .take(loop_len)
-                .enumerate()
-            {
-                let next_challenge = hash_ring_member_optimized::<H>(
-                    &message_hash,
-                    rs[i],
-                    current_challenge,
-                    *ring_member,
-                    &ki_table,
-                    precomputed_data.map(|d| d.hashed_points()[i]),
-                );
-
-                current_challenge = next_challenge;
-
-                if i == n - 1 {
-                    c_0 = current_challenge;
-                }
-
-                if (step + 1) % chunk == 0 || step + 1 == loop_len {
-                    progress(step + 1, loop_len);
-                }
-            }
-        }
-
-        #[cfg(not(feature = "optimized-msm"))]
-        {
-            for (step, (i, ring_member)) in ring_members
-                .iter()
-                .enumerate()
-                .cycle()
-                .skip(secret_index + 1)
-                .take(loop_len)
-                .enumerate()
-            {
-                let next_challenge = hash_ring_member_components::<H>(
-                    &message_hash,
-                    rs[i],
-                    current_challenge,
-                    *ring_member,
-                    key_image,
-                    precomputed_data.map(|d| d.hashed_points()[i]),
-                );
-
-                current_challenge = next_challenge;
-
-                if i == n - 1 {
-                    c_0 = current_challenge;
-                }
-
-                if (step + 1) % chunk == 0 || step + 1 == loop_len {
-                    progress(step + 1, loop_len);
-                }
-            }
-        }
-
-        rs[secret_index] = a.0 - (current_challenge * k);
-
-        Ok(BLSAG {
-            challenge: c_0,
-            responses: rs,
-            key_image,
-        })
+        Self::sign_inner::<H, R>(k, ring, precomputed_data, message, rng, Some(&mut progress))
     }
 
     /// Verifies a signature with progress reporting via callback.
@@ -1113,8 +1017,7 @@ fn hash_ring_member_optimized<H: Digest<OutputSize = U64> + Clone + Default>(
     Scalar::from_hash(h)
 }
 
-/// Compute the chunk size for progress callbacks: ~10% of total, minimum 1.
-#[cfg(feature = "progress-callback")]
+///// Compute the chunk size for progress callbacks: ~10% of total, minimum 1.
 fn progress_chunk_size(total: usize) -> usize {
     (total / 10).max(1)
 }
