@@ -56,7 +56,7 @@
 //! ```
 
 use crate::prelude::*;
-use crate::ring::{PrecomputedRingData, Ring, RingContext, RingHash};
+use crate::ring::{PrecomputedRingData, Ring, RingContext};
 use crate::traits::{KeyImageGen, LinkRef, SignRef, VerifyRef};
 use curve25519_dalek::constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
@@ -84,7 +84,7 @@ pub struct ContextualBLSAG {
 }
 
 impl ContextualBLSAG {
-    /// Signs a message and stores only the Ring's hash (Compact mode).
+    /// Signs a message and stores only the Ring's canonical hash (Compact mode).
     ///
     /// Use this when you expect the verifier to have access to the Ring definition.
     pub fn sign_compact<
@@ -97,20 +97,9 @@ impl ContextualBLSAG {
         message: &[u8],
     ) -> Result<Self, SignatureError> {
         let signature = BLSAG::sign::<H, CSPRNG>(k, ring, precomputed_data, message)?;
-        // Compute the hash using the same algorithm H used for signing (or a standard one).
-        // Here we use the generic D for consensus hash if we could, but Ring::consensus_hash is generic.
-        // For ContextualBLSAG, we need a convention. The `RingContext::consensus_hash` method
-        // allows generating the hash later. But `RingContext::Compact` needs a pre-calculated hash.
-        // We will use the provided `H` for the consensus hash to maintain consistency,
-        // assuming H is suitable for consensus (e.g. Sha3).
-        // Note: The Digest trait bound for sign is OutputSize=U64 (64 bytes), but RingHash is 32 bytes.
-        // We need to truncate or assume the user provides a suitable hash.
-        // To be safe and standard, we will just calculate the hash using H and truncate/pad to 32 bytes.
-        let stored_hash = RingHash::from_output::<H>(ring.consensus_hash::<H>());
-
         Ok(Self {
             signature,
-            context: RingContext::Compact(stored_hash),
+            context: RingContext::Compact(ring.canonical_hash()),
         })
     }
 
@@ -136,18 +125,11 @@ impl ContextualBLSAG {
     /// Generates a fake ContextualBLSAG with Compact context.
     ///
     /// See `BLSAG::generate_fake` for details.
-    pub fn generate_fake_compact<
-        H: Digest<OutputSize = U64> + Clone + Default,
-        CSPRNG: CryptoRng + RngCore + Default,
-    >(
-        ring: &Ring,
-    ) -> Self {
+    pub fn generate_fake_compact<CSPRNG: CryptoRng + RngCore + Default>(ring: &Ring) -> Self {
         let signature = BLSAG::generate_fake::<CSPRNG>(ring);
-        let stored_hash = RingHash::from_output::<H>(ring.consensus_hash::<H>());
-
         Self {
             signature,
-            context: RingContext::Compact(stored_hash),
+            context: RingContext::Compact(ring.canonical_hash()),
         }
     }
 
@@ -166,7 +148,7 @@ impl ContextualBLSAG {
     ///
     /// *   `external_ring`:
     ///     *   If `context` is `Compact`, this is **REQUIRED**. The verification will fail if `None`.
-    ///         The method checks if `external_ring.consensus_hash() == stored_hash` before verifying.
+    ///         The method checks if `external_ring.canonical_hash() == stored_hash` before verifying.
     ///     *   If `context` is `Archival`, this is **OPTIONAL**.
     ///         *   If provided, it checks if `external_ring` matches the stored ring.
     ///         *   It always uses the stored (internal) ring for the mathematical verification.
@@ -178,35 +160,24 @@ impl ContextualBLSAG {
     ) -> bool {
         match &self.context {
             RingContext::Compact(stored_hash) => {
-                // Must provide external ring to verify a compact signature
                 let ring = match external_ring {
                     Some(r) => r,
                     None => return false,
                 };
 
-                // 1. Verify Hash
-                let output = RingHash::from_output::<H>(ring.consensus_hash::<H>());
-
-                if *stored_hash != output {
+                if *stored_hash != ring.canonical_hash() {
                     return false;
                 }
 
-                // 2. Verify Signature
                 BLSAG::verify::<H>(&self.signature, ring, precomputed_data, message)
             }
             RingContext::Archival(internal_ring) => {
-                // If external ring is provided, we can strictly enforce it matches.
                 if let Some(external) = external_ring {
-                    // Fast check: compare consensus hashes first
-                    let output_int = internal_ring.consensus_hash::<H>();
-                    let output_ext = external.consensus_hash::<H>();
-                    if output_int != output_ext {
+                    if internal_ring.canonical_hash() != external.canonical_hash() {
                         return false;
                     }
                 }
 
-                // Use internal ring for verification
-                // Note: precomputed_data must match the internal ring.
                 BLSAG::verify::<H>(&self.signature, internal_ring, precomputed_data, message)
             }
         }
@@ -260,8 +231,11 @@ impl BLSAG {
 
         let n = ring_members.len();
 
-        // If precomputed data is provided, ensure its length matches the ring size to prevent out-of-bounds access.
+        // If precomputed data is provided, verify it belongs to this ring.
         if let Some(d) = precomputed_data {
+            if d.ring_hash() != ring.canonical_hash() {
+                return Err(SignatureError::RingMismatch);
+            }
             if d.hashed_points().len() != n {
                 return Err(SignatureError::InvalidPrecomputedData);
             }
@@ -441,12 +415,13 @@ impl VerifyRef for BLSAG {
         // Length guards: never index untrusted inputs without validating sizes first.
         let n = ring_members.len();
         if signature.responses.len() != n {
-            // If responses count does not match ring size, treat as invalid.
             return false;
         }
         if let Some(d) = precomputed_data {
+            if d.ring_hash() != ring.canonical_hash() {
+                return false;
+            }
             if d.hashed_points().len() != n {
-                // If precomputed points count does not match ring size, treat as invalid.
                 return false;
             }
         }
@@ -581,7 +556,7 @@ mod test {
     }
 
     #[test]
-    fn blsag_sign_rejects_mismatched_precomputed_len() {
+    fn blsag_sign_rejects_mismatched_precomputed_ring() {
         let mut csprng = OsRng::default();
         let k: Scalar = Scalar::random(&mut csprng);
         let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
@@ -593,17 +568,17 @@ mod test {
         public_keys_a.push(k_point);
         let ring_a = Ring::new(public_keys_a);
 
-        // ring_b: larger ring used for signing
+        // ring_b: larger ring used for signing (different members = different canonical hash)
         let mut public_keys_b: Vec<RistrettoPoint> = ring_a.members().to_vec();
         public_keys_b.push(RistrettoPoint::random(&mut csprng));
         let ring_b = Ring::new(public_keys_b);
 
-        // Using smaller ring precomputation against a larger ring should return an error, not panic
+        // Using precomputation from a different ring should return RingMismatch
         let precomp_small = ring_a.precompute::<Sha512>();
         let message = b"m".to_vec();
         let err = BLSAG::sign::<Sha512, OsRng>(k, &ring_b, Some(&precomp_small), &message)
-            .expect_err("expected InvalidPrecomputedData error");
-        assert_eq!(err, SignatureError::InvalidPrecomputedData);
+            .expect_err("expected RingMismatch error");
+        assert_eq!(err, SignatureError::RingMismatch);
     }
 
     #[test]

@@ -117,7 +117,7 @@ fn test_ring_serde_and_hash() {
         .collect();
 
     let ring = Ring::new(public_keys.clone());
-    let original_hash = ring.consensus_hash::<Sha512>();
+    let original_hash = ring.canonical_hash();
 
     // Test Serialization
     let serialized = serde_json::to_string(&ring).expect("Failed to serialize ring");
@@ -125,7 +125,7 @@ fn test_ring_serde_and_hash() {
     // Test Deserialization
     let deserialized_ring: Ring =
         serde_json::from_str(&serialized).expect("Failed to deserialize ring");
-    let deserialized_hash = deserialized_ring.consensus_hash::<Sha512>();
+    let deserialized_hash = deserialized_ring.canonical_hash();
 
     // 1. Hashes must match
     assert_eq!(
@@ -147,7 +147,7 @@ fn test_ring_serde_and_hash() {
         shuffled_keys.swap(0, 1);
     }
     let ring_shuffled = Ring::new(shuffled_keys);
-    let shuffled_hash = ring_shuffled.consensus_hash::<Sha512>();
+    let shuffled_hash = ring_shuffled.canonical_hash();
 
     assert_eq!(
         original_hash, shuffled_hash,

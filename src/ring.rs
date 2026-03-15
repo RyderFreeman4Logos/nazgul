@@ -3,8 +3,13 @@
 use crate::prelude::*;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use digest::{generic_array::typenum::U64, Digest};
+use sha3::Sha3_512;
 
-/// A strongly-typed wrapper for a 32-byte consensus hash of a Ring.
+/// A strongly-typed wrapper for a 32-byte canonical hash of a Ring.
+///
+/// The hash is always computed using SHA3-512, truncated to 32 bytes.
+/// This guarantees that the same set of sorted ring members always produces
+/// the same `RingHash`, regardless of caller-chosen digest algorithms.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RingHash(pub [u8; 32]);
@@ -41,14 +46,18 @@ impl From<[u8; 32]> for RingHash {
 }
 
 impl RingHash {
-    /// Creates a RingHash from a Digest Output.
+    /// Computes a canonical `RingHash` from a slice of ring members.
     ///
-    /// If the hash output is larger than 32 bytes, it truncates.
-    /// If smaller, it pads with zeros.
-    pub fn from_output<D: Digest>(output: digest::Output<D>) -> Self {
+    /// Uses SHA3-512 as the fixed digest algorithm, truncated to 32 bytes.
+    /// The caller is responsible for ensuring members are sorted (as `Ring` guarantees).
+    pub(crate) fn from_members(members: &[RistrettoPoint]) -> Self {
+        let mut hasher = Sha3_512::default();
+        for member in members {
+            hasher.update(member.compress().as_bytes());
+        }
+        let output = hasher.finalize();
         let mut bytes = [0u8; 32];
-        let len = core::cmp::min(output.len(), 32);
-        bytes[..len].copy_from_slice(&output[..len]);
+        bytes.copy_from_slice(&output[..32]);
         Self(bytes)
     }
 }
@@ -69,26 +78,28 @@ pub enum RingContext {
 }
 
 impl RingContext {
-    /// Returns the hash associated with this context.
+    /// Returns the canonical hash associated with this context.
     ///
     /// If `Compact`, returns the stored hash.
-    /// If `Archival`, computes the hash of the stored ring.
-    pub fn consensus_hash<D: Digest + Default>(&self) -> RingHash {
+    /// If `Archival`, computes the canonical hash of the stored ring.
+    pub fn canonical_hash(&self) -> RingHash {
         match self {
             RingContext::Compact(h) => *h,
-            RingContext::Archival(ring) => RingHash::from_output::<D>(ring.consensus_hash::<D>()),
+            RingContext::Archival(ring) => ring.canonical_hash(),
         }
     }
 }
 
 /// Represents pre-computed data for a `Ring` to accelerate cryptographic operations.
 ///
-/// This structure holds the results of hashing each public key in the ring onto the curve.
-/// By performing this computationally expensive step once and caching the result, both
-/// signing and verification can be significantly sped up.
+/// This structure holds the results of hashing each public key in the ring onto the curve,
+/// along with the canonical `RingHash` of the ring it was computed from. The `ring_hash`
+/// is checked during signing and verification to ensure the precomputed data matches
+/// the ring being used.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PrecomputedRingData {
+    ring_hash: RingHash,
     hashed_points: Vec<RistrettoPoint>,
 }
 
@@ -98,13 +109,20 @@ impl PrecomputedRingData {
         &self.hashed_points
     }
 
+    /// Returns the canonical hash of the ring this data was computed from.
+    pub fn ring_hash(&self) -> RingHash {
+        self.ring_hash
+    }
+
     /// Verifies that the pre-computed data is valid for the given `Ring`.
     ///
-    /// This is a crucial security step. It re-calculates the expected hashed points
-    /// from the ring's public keys and compares them against the points stored in this
-    /// pre-computed object to ensure they match. A user should always run this check
-    /// on any pre-computed data received from an untrusted source.
+    /// This is a crucial security step. It checks that the canonical ring hash matches,
+    /// then re-calculates the expected hashed points from the ring's public keys and
+    /// compares them against the points stored in this pre-computed object.
     pub fn verify<H: Digest<OutputSize = U64> + Clone + Default>(&self, ring: &Ring) -> bool {
+        if self.ring_hash != ring.canonical_hash() {
+            return false;
+        }
         if self.hashed_points.len() != ring.members.len() {
             return false;
         }
@@ -164,11 +182,14 @@ impl Ring {
         &self.members
     }
 
-    /// Computes a deterministic "consensus hash" of the ring.
+    /// Computes the canonical hash of this ring.
     ///
-    /// This hash serves as a unique identifier (fingerprint) for the ring's content and ordering.
-    /// Since `Ring` guarantees its members are sorted, this hash is deterministic regardless of
-    /// the order in which the keys were originally provided to `Ring::new()`.
+    /// Uses SHA3-512 (truncated to 32 bytes) as the fixed digest algorithm, ensuring
+    /// the same ring members always produce the same `RingHash` regardless of the
+    /// caller's choice of cryptographic hash function.
+    ///
+    /// Since `Ring` guarantees its members are sorted, this hash is deterministic
+    /// regardless of the order in which keys were originally provided to `Ring::new()`.
     ///
     /// This is useful for:
     /// 1.  **Caching**: Using the hash as a key to retrieve `PrecomputedRingData`.
@@ -180,8 +201,6 @@ impl Ring {
     /// # use nazgul::ring::Ring;
     /// # use curve25519_dalek::ristretto::RistrettoPoint;
     /// # use rand_core::OsRng;
-    /// # use sha3::Sha3_256;
-    /// # use digest::Digest;
     /// # fn main() {
     /// # let mut csprng = OsRng;
     /// let points = vec![
@@ -189,29 +208,29 @@ impl Ring {
     ///     RistrettoPoint::random(&mut csprng)
     /// ];
     /// let ring = Ring::new(points);
-    /// let hash = ring.consensus_hash::<Sha3_256>();
+    /// let hash = ring.canonical_hash();
     /// # }
     /// ```
-    pub fn consensus_hash<D: Digest + Default>(&self) -> digest::Output<D> {
-        let mut hasher = D::default();
-        for member in &self.members {
-            hasher.update(member.compress().as_bytes());
-        }
-        hasher.finalize()
+    pub fn canonical_hash(&self) -> RingHash {
+        RingHash::from_members(&self.members)
     }
 
     /// Performs the pre-computation step for this ring.
     ///
     /// This iterates through all public keys in the ring, hashes them to a point on
-    /// the curve, and returns a `PrecomputedRingData` object containing the results.
-    /// This object can then be used to accelerate future signing and verification operations.
+    /// the curve, and returns a `PrecomputedRingData` object containing the results
+    /// along with the ring's canonical hash. This object can then be used to accelerate
+    /// future signing and verification operations.
     pub fn precompute<H: Digest<OutputSize = U64> + Clone + Default>(&self) -> PrecomputedRingData {
         let hashed_points = self
             .members
             .iter()
             .map(|p| RistrettoPoint::from_hash(H::default().chain_update(p.compress().to_bytes())))
             .collect();
-        PrecomputedRingData { hashed_points }
+        PrecomputedRingData {
+            ring_hash: self.canonical_hash(),
+            hashed_points,
+        }
     }
 
     /// Adds a public key to the ring while preserving the sorted invariant.

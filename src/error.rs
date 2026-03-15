@@ -9,6 +9,9 @@ pub enum SignatureError {
     /// Provided precomputed ring data is not compatible with the ring in use
     /// (e.g., length mismatch).
     InvalidPrecomputedData,
+    /// The precomputed ring data was computed for a different ring than the one
+    /// being used for signing or verification.
+    RingMismatch,
 }
 
 impl core::fmt::Display for SignatureError {
@@ -19,6 +22,9 @@ impl core::fmt::Display for SignatureError {
             }
             SignatureError::InvalidPrecomputedData => {
                 write!(f, "Invalid precomputed ring data for the given ring")
+            }
+            SignatureError::RingMismatch => {
+                write!(f, "Precomputed ring data was computed for a different ring")
             }
         }
     }
