@@ -15,6 +15,8 @@ pub enum SignatureError {
     RingMismatch,
     /// One or more compressed points in the ring failed to decompress.
     DecompressionFailed,
+    /// The ring is in compressed state and must be decompressed before use.
+    CompressedRing,
 }
 
 impl core::fmt::Display for SignatureError {
@@ -33,6 +35,12 @@ impl core::fmt::Display for SignatureError {
                 write!(
                     f,
                     "One or more compressed points in the ring failed to decompress"
+                )
+            }
+            SignatureError::CompressedRing => {
+                write!(
+                    f,
+                    "Ring is in compressed state; call decompress() before signing or verifying"
                 )
             }
         }

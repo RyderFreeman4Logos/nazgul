@@ -414,6 +414,9 @@ impl BLSAG {
         message: &[u8],
         rng: &mut R,
     ) -> Result<BLSAG, SignatureError> {
+        if !ring.is_decompressed() {
+            return Err(SignatureError::CompressedRing);
+        }
         let ring_members = ring.members();
 
         // Provers public key
@@ -551,6 +554,9 @@ impl BLSAG {
         precomputed_data: Option<&PreparedRing>,
         rng: &mut R,
     ) -> Result<SigningPrecomputation, SignatureError> {
+        if !ring.is_decompressed() {
+            return Err(SignatureError::CompressedRing);
+        }
         let ring_members = ring.members();
         let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
 
@@ -607,6 +613,9 @@ impl BLSAG {
         precomputed_data: Option<&PreparedRing>,
         message: &[u8],
     ) -> Result<BLSAG, SignatureError> {
+        if !ring.is_decompressed() {
+            return Err(SignatureError::CompressedRing);
+        }
         if precomp.ring_hash != ring.canonical_hash() {
             return Err(SignatureError::RingMismatch);
         }
@@ -746,6 +755,9 @@ impl BLSAG {
         rng: &mut R,
         mut progress: impl FnMut(usize, usize),
     ) -> Result<BLSAG, SignatureError> {
+        if !ring.is_decompressed() {
+            return Err(SignatureError::CompressedRing);
+        }
         let ring_members = ring.members();
 
         let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
@@ -891,6 +903,9 @@ impl BLSAG {
         message: &[u8],
         mut progress: impl FnMut(usize, usize),
     ) -> bool {
+        if !ring.is_decompressed() {
+            return false;
+        }
         let mut reconstructed_c: Scalar = signature.challenge;
         let message_hash = H::default().chain_update(message);
         let ring_members = ring.members();
@@ -962,7 +977,7 @@ impl BLSAG {
     /// It avoids expensive multiscalar multiplications required for real signing.
     pub fn generate_fake<CSPRNG: CryptoRng + RngCore + Default>(ring: &Ring) -> Self {
         let mut csprng = CSPRNG::default();
-        let n = ring.members().len();
+        let n = ring.len();
 
         let challenge = Scalar::random(&mut csprng);
         let responses: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut csprng)).collect();
@@ -1095,6 +1110,9 @@ impl VerifyRef for BLSAG {
         precomputed_data: Option<&PreparedRing>,
         message: &[u8],
     ) -> bool {
+        if !ring.is_decompressed() {
+            return false;
+        }
         let mut reconstructed_c: Scalar = signature.challenge;
         let message_hash = H::default().chain_update(message);
         let ring_members = ring.members();
@@ -1558,5 +1576,69 @@ mod test {
             "verify progress must fire at least once"
         );
         assert_eq!(verify_last_current.get(), verify_last_total.get());
+    }
+
+    #[test]
+    fn blsag_sign_rejects_compressed_ring() {
+        let mut csprng = OsRng::default();
+        let k: Scalar = Scalar::random(&mut csprng);
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+
+        let mut public_keys: Vec<RistrettoPoint> = (0..3)
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        public_keys.push(k_point);
+
+        let compressed_keys: Vec<_> = public_keys.iter().map(|p| p.compress()).collect();
+        let compressed_ring = Ring::from_compressed(compressed_keys);
+
+        let message = b"compressed ring test";
+        let err = BLSAG::sign::<Sha512, OsRng>(k, &compressed_ring, None, message)
+            .expect_err("expected CompressedRing error");
+        assert_eq!(err, SignatureError::CompressedRing);
+    }
+
+    #[test]
+    fn blsag_verify_rejects_compressed_ring() {
+        let mut csprng = OsRng::default();
+        let k: Scalar = Scalar::random(&mut csprng);
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+
+        let mut public_keys: Vec<RistrettoPoint> = (0..3)
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        public_keys.push(k_point);
+
+        let ring = Ring::new(public_keys.clone());
+        let message = b"compressed ring verify test";
+        let signature = BLSAG::sign::<Sha512, OsRng>(k, &ring, None, message).unwrap();
+
+        // Build a compressed ring (same members) and try to verify
+        let compressed_keys: Vec<_> = public_keys.iter().map(|p| p.compress()).collect();
+        let compressed_ring = Ring::from_compressed(compressed_keys);
+
+        let result = BLSAG::verify::<Sha512>(&signature, &compressed_ring, None, message);
+        assert!(!result, "verify must return false for compressed ring");
+    }
+
+    #[test]
+    fn blsag_precompute_signing_rejects_compressed_ring() {
+        let mut csprng = OsRng::default();
+        let k: Scalar = Scalar::random(&mut csprng);
+        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+
+        let mut public_keys: Vec<RistrettoPoint> = (0..2)
+            .map(|_| RistrettoPoint::random(&mut csprng))
+            .collect();
+        public_keys.push(k_point);
+
+        let compressed_keys: Vec<_> = public_keys.iter().map(|p| p.compress()).collect();
+        let compressed_ring = Ring::from_compressed(compressed_keys);
+
+        let result = BLSAG::precompute_signing::<Sha512, _>(k, &compressed_ring, None, &mut csprng);
+        match result {
+            Err(e) => assert_eq!(e, SignatureError::CompressedRing),
+            Ok(_) => panic!("expected CompressedRing error"),
+        }
     }
 }
