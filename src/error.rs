@@ -3,6 +3,7 @@
 /// Represents the possible errors that can occur during signature operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub enum SignatureError {
     /// Occurs when the signer's public key is not found within the provided ring.
     SignerNotFound,

@@ -848,4 +848,13 @@ gh_pr_draft.md
 **/*.zh.md
 pkg
 AGENTS.md
+.csa
+.weave
 .cargo-local
+.agents/
+.claude/
+.codex/
+.gemini/
+CLAUDE.md
+drafts
+
