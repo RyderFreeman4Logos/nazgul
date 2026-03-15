@@ -1,7 +1,7 @@
 //! Module for the `Ring` structure, ensuring sorted public keys for efficient signing.
 
 use crate::prelude::*;
-use curve25519_dalek::ristretto::RistrettoPoint;
+use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use digest::{generic_array::typenum::U64, Digest};
 use sha3::Sha3_512;
 
@@ -46,14 +46,14 @@ impl From<[u8; 32]> for RingHash {
 }
 
 impl RingHash {
-    /// Computes a canonical `RingHash` from a slice of ring members.
+    /// Computes a canonical `RingHash` from a slice of compressed points.
     ///
     /// Uses SHA3-512 as the fixed digest algorithm, truncated to 32 bytes.
     /// The caller is responsible for ensuring members are sorted (as `Ring` guarantees).
-    pub(crate) fn from_members(members: &[RistrettoPoint]) -> Self {
+    pub(crate) fn from_compressed_members(members: &[CompressedRistretto]) -> Self {
         let mut hasher = Sha3_512::default();
         for member in members {
-            hasher.update(member.compress().as_bytes());
+            hasher.update(member.as_bytes());
         }
         let output = hasher.finalize();
         let mut bytes = [0u8; 32];
@@ -128,15 +128,19 @@ impl PreparedRing {
     /// This is a crucial security step. It checks that the canonical ring hash matches,
     /// then re-calculates the expected hashed points from the ring's public keys and
     /// compares them against the points stored in this pre-computed object.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ring is in `Compressed` state. Call `decompress()` first.
     pub fn verify<H: Digest<OutputSize = U64> + Clone + Default>(&self, ring: &Ring) -> bool {
         if self.ring_hash != ring.canonical_hash() {
             return false;
         }
-        if self.hashed_points.len() != ring.members.len() {
+        let members = ring.members();
+        if self.hashed_points.len() != members.len() {
             return false;
         }
-        let expected_points: Vec<RistrettoPoint> = ring
-            .members
+        let expected_points: Vec<RistrettoPoint> = members
             .iter()
             .map(|p| RistrettoPoint::from_hash(H::default().chain_update(p.compress().to_bytes())))
             .collect();
@@ -145,12 +149,35 @@ impl PreparedRing {
     }
 }
 
+/// Internal representation of ring members.
+///
+/// - `Full`: Both decompressed points and their compressed forms are available.
+///   This is the default state after `Ring::new()` and is required for signing/verification.
+/// - `Compressed`: Only compressed points are stored, saving memory.
+///   Must be decompressed via `Ring::decompress()` before accessing `members()`.
+#[derive(Clone, Debug)]
+enum RingRepr {
+    Full {
+        compressed: Vec<CompressedRistretto>,
+        points: Vec<RistrettoPoint>,
+    },
+    Compressed(Vec<CompressedRistretto>),
+}
+
 /// Represents a ring of public keys for a ring signature.
 ///
 /// The `Ring` struct guarantees that its internal list of public keys is always
-/// sorted by their byte representation. This is a critical invariant that allows
-/// for high-performance binary searching during the signing process, avoiding
-/// a slow linear scan.
+/// sorted by their compressed byte representation. This is a critical invariant
+/// that allows for high-performance binary searching during the signing process,
+/// avoiding a slow linear scan.
+///
+/// A `Ring` can exist in two internal states:
+///
+/// - **Full**: Both decompressed `RistrettoPoint`s and `CompressedRistretto` bytes
+///   are available. Created via `Ring::new()` or `Ring::decompress()`.
+/// - **Compressed**: Only `CompressedRistretto` bytes are stored. Created via
+///   `Ring::from_compressed()`. This state uses ~50% less memory but requires
+///   explicit decompression before signing or verification.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
@@ -158,10 +185,9 @@ impl PreparedRing {
     serde(try_from = "Vec<RistrettoPoint>", into = "Vec<RistrettoPoint>")
 )]
 pub struct Ring {
-    members: Vec<RistrettoPoint>,
+    repr: RingRepr,
 }
 
-// Implement TryFrom for safe deserialization that enforces sorting
 impl From<Vec<RistrettoPoint>> for Ring {
     fn from(points: Vec<RistrettoPoint>) -> Self {
         Self::new(points)
@@ -170,7 +196,12 @@ impl From<Vec<RistrettoPoint>> for Ring {
 
 impl From<Ring> for Vec<RistrettoPoint> {
     fn from(ring: Ring) -> Self {
-        ring.members
+        match ring.repr {
+            RingRepr::Full { points, .. } => points,
+            RingRepr::Compressed(_) => {
+                panic!("Ring must be decompressed before converting to Vec<RistrettoPoint>. Call decompress() first.")
+            }
+        }
     }
 }
 
@@ -178,17 +209,102 @@ impl Ring {
     /// Creates a new `Ring` from a vector of public keys.
     ///
     /// The constructor takes ownership of the vector and immediately sorts the
-    /// public keys to enforce the struct's invariant.
+    /// public keys to enforce the struct's invariant. Both decompressed and
+    /// compressed forms are stored (Full representation).
     pub fn new(public_keys: Vec<RistrettoPoint>) -> Self {
-        let mut members = public_keys;
-        sort_members_in_place(&mut members);
-        Self { members }
+        let sorted = sort_and_compress(public_keys);
+        Self {
+            repr: RingRepr::Full {
+                compressed: sorted.compressed,
+                points: sorted.points,
+            },
+        }
+    }
+
+    /// Creates a `Ring` from pre-compressed points.
+    ///
+    /// The points are sorted by their byte representation. No decompression
+    /// is performed, so this is an O(n log n) operation on cheap byte comparisons.
+    ///
+    /// The resulting ring is in `Compressed` state. Call [`decompress()`](Ring::decompress)
+    /// before passing it to signing or verification functions.
+    pub fn from_compressed(compressed_keys: Vec<CompressedRistretto>) -> Self {
+        let mut sorted = compressed_keys;
+        sorted.sort_unstable_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        Self {
+            repr: RingRepr::Compressed(sorted),
+        }
+    }
+
+    /// Decompresses a `Compressed` ring into a `Full` ring.
+    ///
+    /// If the ring is already `Full`, returns `self` unchanged.
+    /// Returns `Err(SignatureError::DecompressionFailed)` if any point fails to decompress.
+    pub fn decompress(self) -> Result<Ring, SignatureError> {
+        match self.repr {
+            RingRepr::Full { .. } => Ok(self),
+            RingRepr::Compressed(compressed) => {
+                let mut points = Vec::with_capacity(compressed.len());
+                for c in &compressed {
+                    match c.decompress() {
+                        Some(p) => points.push(p),
+                        None => return Err(SignatureError::DecompressionFailed),
+                    }
+                }
+                Ok(Ring {
+                    repr: RingRepr::Full { compressed, points },
+                })
+            }
+        }
+    }
+
+    /// Returns `true` if the ring is in `Full` (decompressed) state.
+    pub fn is_decompressed(&self) -> bool {
+        matches!(self.repr, RingRepr::Full { .. })
     }
 
     /// Returns a slice containing all the public key members of the ring, guaranteed
     /// to be in sorted order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ring is in `Compressed` state. Call `decompress()` first.
     pub fn members(&self) -> &[RistrettoPoint] {
-        &self.members
+        match &self.repr {
+            RingRepr::Full { points, .. } => points,
+            RingRepr::Compressed(_) => {
+                panic!(
+                    "Ring must be decompressed before accessing members. Call decompress() first."
+                )
+            }
+        }
+    }
+
+    /// Returns a slice of the compressed ring members.
+    ///
+    /// Works on both `Full` and `Compressed` rings.
+    pub fn compressed_members(&self) -> &[CompressedRistretto] {
+        match &self.repr {
+            RingRepr::Full { compressed, .. } => compressed,
+            RingRepr::Compressed(compressed) => compressed,
+        }
+    }
+
+    /// Returns the number of members in the ring.
+    ///
+    /// Works on both `Full` and `Compressed` rings.
+    pub fn len(&self) -> usize {
+        match &self.repr {
+            RingRepr::Full { points, .. } => points.len(),
+            RingRepr::Compressed(compressed) => compressed.len(),
+        }
+    }
+
+    /// Returns `true` if the ring contains no members.
+    ///
+    /// Works on both `Full` and `Compressed` rings.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Computes the canonical hash of this ring.
@@ -200,10 +316,7 @@ impl Ring {
     /// Since `Ring` guarantees its members are sorted, this hash is deterministic
     /// regardless of the order in which keys were originally provided to `Ring::new()`.
     ///
-    /// This is useful for:
-    /// 1.  **Caching**: Using the hash as a key to retrieve a [`PreparedRing`].
-    /// 2.  **Versioning**: Tracking changes to dynamic rings in an event-sourced system.
-    /// 3.  **Integrity**: Verifying that a transmitted ring matches the expected definition.
+    /// Works on both `Full` and `Compressed` rings (uses compressed bytes for hashing).
     ///
     /// # Example
     /// ```
@@ -221,7 +334,7 @@ impl Ring {
     /// # }
     /// ```
     pub fn canonical_hash(&self) -> RingHash {
-        RingHash::from_members(&self.members)
+        RingHash::from_compressed_members(self.compressed_members())
     }
 
     /// Performs the pre-computation step for this ring.
@@ -230,9 +343,13 @@ impl Ring {
     /// the curve, and returns a [`PreparedRing`] containing the results along with
     /// the ring's canonical hash. The prepared data can then be reused to accelerate
     /// future signing and verification operations.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ring is in `Compressed` state. Call `decompress()` first.
     pub fn precompute<H: Digest<OutputSize = U64> + Clone + Default>(&self) -> PreparedRing {
-        let hashed_points = self
-            .members
+        let members = self.members();
+        let hashed_points = members
             .iter()
             .map(|p| RistrettoPoint::from_hash(H::default().chain_update(p.compress().to_bytes())))
             .collect();
@@ -247,45 +364,70 @@ impl Ring {
     /// The key is inserted and the members are re-sorted by their compressed byte
     /// representation. Duplicate entries are allowed and will be placed according
     /// to their sort order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ring is in `Compressed` state. Call `decompress()` first.
     pub fn add_public_key(&mut self, pubkey: RistrettoPoint) {
-        self.members.push(pubkey);
-        sort_members_in_place(&mut self.members);
+        match &mut self.repr {
+            RingRepr::Full { compressed, points } => {
+                points.push(pubkey);
+                let sorted = sort_and_compress(core::mem::take(points));
+                *compressed = sorted.compressed;
+                *points = sorted.points;
+            }
+            RingRepr::Compressed(_) => {
+                panic!("Ring must be decompressed before adding keys. Call decompress() first.")
+            }
+        }
     }
 
     /// Removes the first occurrence of the given public key, preserving order.
     ///
     /// Returns `true` if a matching key was removed, `false` otherwise. The
     /// ring remains sorted after removal.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the ring is in `Compressed` state. Call `decompress()` first.
     pub fn remove_public_key(&mut self, pubkey: RistrettoPoint) -> bool {
-        let target_bytes = pubkey.compress().to_bytes();
-        match self
-            .members
-            .binary_search_by(|p| p.compress().to_bytes().cmp(&target_bytes))
-        {
-            Ok(mut pos) => {
-                while pos > 0 && self.members[pos - 1].compress().to_bytes() == target_bytes {
-                    pos -= 1;
+        match &mut self.repr {
+            RingRepr::Full { compressed, points } => {
+                let target_bytes = pubkey.compress();
+                match compressed.binary_search_by(|c| c.as_bytes().cmp(target_bytes.as_bytes())) {
+                    Ok(mut pos) => {
+                        while pos > 0 && compressed[pos - 1].as_bytes() == target_bytes.as_bytes() {
+                            pos -= 1;
+                        }
+                        compressed.remove(pos);
+                        points.remove(pos);
+                        true
+                    }
+                    Err(_) => false,
                 }
-                self.members.remove(pos);
-                true
             }
-            Err(_) => false,
+            RingRepr::Compressed(_) => {
+                panic!("Ring must be decompressed before removing keys. Call decompress() first.")
+            }
         }
     }
 }
 
-/// Sorts ring members by their compressed byte representation.
-fn sort_members_in_place(members: &mut Vec<RistrettoPoint>) {
-    // Optimization: Pre-compute the compressed bytes to avoid re-calculating
-    // them during the sort. `compress()` involves expensive field inversions.
-    let mut members_with_bytes: Vec<([u8; 32], RistrettoPoint)> = members
-        .drain(..)
-        .map(|p| (p.compress().to_bytes(), p))
-        .collect();
+/// Result of sorting points: both compressed and decompressed forms, kept in sync.
+struct SortedMembers {
+    compressed: Vec<CompressedRistretto>,
+    points: Vec<RistrettoPoint>,
+}
 
-    members_with_bytes.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+/// Sorts ring members by their compressed byte representation, returning both forms.
+fn sort_and_compress(members: Vec<RistrettoPoint>) -> SortedMembers {
+    let mut pairs: Vec<(CompressedRistretto, RistrettoPoint)> =
+        members.into_iter().map(|p| (p.compress(), p)).collect();
 
-    *members = members_with_bytes.into_iter().map(|(_, p)| p).collect();
+    pairs.sort_unstable_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+
+    let (compressed, points) = pairs.into_iter().unzip();
+    SortedMembers { compressed, points }
 }
 
 #[cfg(test)]
@@ -301,6 +443,103 @@ mod tests {
     }
 
     #[test]
+    fn new_ring_is_full() {
+        let points = sample_points();
+        let ring = Ring::new(points);
+        assert!(ring.is_decompressed());
+    }
+
+    #[test]
+    fn from_compressed_creates_compressed_ring() {
+        let points = sample_points();
+        let compressed: Vec<CompressedRistretto> = points.iter().map(|p| p.compress()).collect();
+        let ring = Ring::from_compressed(compressed);
+        assert!(!ring.is_decompressed());
+    }
+
+    #[test]
+    fn decompress_roundtrip() {
+        let points = sample_points();
+        let full_ring = Ring::new(points.clone());
+        let compressed: Vec<CompressedRistretto> = points.iter().map(|p| p.compress()).collect();
+        let compressed_ring = Ring::from_compressed(compressed);
+
+        let decompressed = compressed_ring.decompress().unwrap();
+        assert!(decompressed.is_decompressed());
+
+        // Same canonical hash as the full ring
+        assert_eq!(full_ring.canonical_hash(), decompressed.canonical_hash());
+        assert_eq!(full_ring.members(), decompressed.members());
+    }
+
+    #[test]
+    fn decompress_full_is_noop() {
+        let points = sample_points();
+        let ring = Ring::new(points.clone());
+        let hash_before = ring.canonical_hash();
+        let ring = ring.decompress().unwrap();
+        assert_eq!(hash_before, ring.canonical_hash());
+    }
+
+    #[test]
+    fn compressed_members_works_on_both() {
+        let points = sample_points();
+        let full_ring = Ring::new(points.clone());
+        let compressed_keys: Vec<CompressedRistretto> =
+            points.iter().map(|p| p.compress()).collect();
+        let compressed_ring = Ring::from_compressed(compressed_keys);
+
+        // Both should have the same compressed members (same sorting)
+        assert_eq!(
+            full_ring.compressed_members(),
+            compressed_ring.compressed_members()
+        );
+    }
+
+    #[test]
+    fn len_works_on_both() {
+        let points = sample_points();
+        let full_ring = Ring::new(points.clone());
+        let compressed: Vec<CompressedRistretto> = points.iter().map(|p| p.compress()).collect();
+        let compressed_ring = Ring::from_compressed(compressed);
+
+        assert_eq!(full_ring.len(), 3);
+        assert_eq!(compressed_ring.len(), 3);
+    }
+
+    #[test]
+    fn canonical_hash_same_for_both_reprs() {
+        let points = sample_points();
+        let full_ring = Ring::new(points.clone());
+        let compressed: Vec<CompressedRistretto> = points.iter().map(|p| p.compress()).collect();
+        let compressed_ring = Ring::from_compressed(compressed);
+
+        assert_eq!(full_ring.canonical_hash(), compressed_ring.canonical_hash());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Ring must be decompressed before accessing members. Call decompress() first."
+    )]
+    fn members_panics_on_compressed() {
+        let points = sample_points();
+        let compressed: Vec<CompressedRistretto> = points.iter().map(|p| p.compress()).collect();
+        let ring = Ring::from_compressed(compressed);
+        let _ = ring.members();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Ring must be decompressed before accessing members. Call decompress() first."
+    )]
+    fn precompute_panics_on_compressed() {
+        let points = sample_points();
+        let compressed: Vec<CompressedRistretto> = points.iter().map(|p| p.compress()).collect();
+        let ring = Ring::from_compressed(compressed);
+        let _ = ring.precompute::<Sha3_512>();
+    }
+
+    #[test]
     fn add_public_key_keeps_ring_sorted() {
         let mut points = sample_points();
         let p_gamma = points.pop().unwrap();
@@ -310,10 +549,8 @@ mod tests {
         let mut ring = Ring::new(vec![p_beta, p_gamma]);
         ring.add_public_key(p_alpha);
 
-        let mut expected = vec![p_alpha, p_beta, p_gamma];
-        sort_members_in_place(&mut expected);
-
-        assert_eq!(ring.members(), expected.as_slice());
+        let expected = Ring::new(vec![p_alpha, p_beta, p_gamma]);
+        assert_eq!(ring.members(), expected.members());
     }
 
     #[test]
@@ -323,10 +560,8 @@ mod tests {
 
         assert!(ring.remove_public_key(points[1]));
 
-        let mut expected = vec![points[0], points[2]];
-        sort_members_in_place(&mut expected);
-
-        assert_eq!(ring.members(), expected.as_slice());
+        let expected = Ring::new(vec![points[0], points[2]]);
+        assert_eq!(ring.members(), expected.members());
     }
 
     #[test]
@@ -336,10 +571,8 @@ mod tests {
 
         assert!(!ring.remove_public_key(points[2]));
 
-        let mut expected = vec![points[0], points[1]];
-        sort_members_in_place(&mut expected);
-
-        assert_eq!(ring.members(), expected.as_slice());
+        let expected = Ring::new(vec![points[0], points[1]]);
+        assert_eq!(ring.members(), expected.members());
     }
 
     #[test]
@@ -356,9 +589,16 @@ mod tests {
             .count();
         assert_eq!(remaining, 1);
 
-        let mut expected = vec![points[0], points[1], points[2]];
-        sort_members_in_place(&mut expected);
+        let expected = Ring::new(vec![points[0], points[1], points[2]]);
+        assert_eq!(ring.members(), expected.members());
+    }
 
-        assert_eq!(ring.members(), expected.as_slice());
+    #[test]
+    fn decompression_failure_returns_error() {
+        // Create an invalid compressed point (all 0xFF bytes is not a valid Ristretto point)
+        let invalid = CompressedRistretto::from_slice(&[0xFFu8; 32]).unwrap();
+        let ring = Ring::from_compressed(vec![invalid]);
+        let result = ring.decompress();
+        assert_eq!(result.unwrap_err(), SignatureError::DecompressionFailed);
     }
 }

@@ -13,6 +13,8 @@ pub enum SignatureError {
     /// The precomputed ring data was computed for a different ring than the one
     /// being used for signing or verification.
     RingMismatch,
+    /// One or more compressed points in the ring failed to decompress.
+    DecompressionFailed,
 }
 
 impl core::fmt::Display for SignatureError {
@@ -26,6 +28,12 @@ impl core::fmt::Display for SignatureError {
             }
             SignatureError::RingMismatch => {
                 write!(f, "Precomputed ring data was computed for a different ring")
+            }
+            SignatureError::DecompressionFailed => {
+                write!(
+                    f,
+                    "One or more compressed points in the ring failed to decompress"
+                )
             }
         }
     }
