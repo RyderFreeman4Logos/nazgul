@@ -27,7 +27,7 @@ impl BLSAG {
     pub fn verify_with_progress<H: Digest<OutputSize = U64> + Clone + Default>(
         signature: &BLSAG,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
         mut progress: impl FnMut(usize, usize),
     ) -> bool {
@@ -35,7 +35,9 @@ impl BLSAG {
             return false;
         }
         let mut reconstructed_c: Scalar = signature.challenge;
-        let message_hash = H::default().chain_update(message);
+        let message_hash = H::default()
+            .chain_update(b"nazgul-chal-v3")
+            .chain_update(message);
         let ring_members = ring.members();
 
         let n = ring_members.len();
@@ -100,14 +102,16 @@ impl VerifyRef for BLSAG {
     fn verify<H: Digest<OutputSize = U64> + Clone + Default>(
         signature: &BLSAG,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
     ) -> bool {
         if !ring.is_decompressed() {
             return false;
         }
         let mut reconstructed_c: Scalar = signature.challenge;
-        let message_hash = H::default().chain_update(message);
+        let message_hash = H::default()
+            .chain_update(b"nazgul-chal-v3")
+            .chain_update(message);
         let ring_members = ring.members();
 
         // Length guards: never index untrusted inputs without validating sizes first.

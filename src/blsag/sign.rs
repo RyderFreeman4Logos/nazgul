@@ -27,7 +27,7 @@ impl BLSAG {
     pub fn sign_with_rng<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
         rng: &mut R,
     ) -> Result<BLSAG, SignatureError> {
@@ -40,24 +40,27 @@ impl BLSAG {
     fn sign_inner<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
         rng: &mut R,
         mut progress: Option<&mut dyn FnMut(usize, usize)>,
     ) -> Result<BLSAG, SignatureError> {
+        // Wrap the secret key for zeroization on scope exit.
+        let k = SecretScalar(k);
+
         if !ring.is_decompressed() {
             return Err(SignatureError::CompressedRing);
         }
         let ring_members = ring.members();
 
         // Prover's public key
-        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+        let k_point: RistrettoPoint = k.0 * constants::RISTRETTO_BASEPOINT_POINT;
 
         let secret_index = ring_members
             .binary_search_by_key(&k_point.compress().to_bytes(), |p| p.compress().to_bytes())
             .map_err(|_| SignatureError::SignerNotFound)?;
 
-        let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k);
+        let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k.0);
 
         let n = ring_members.len();
 
@@ -77,6 +80,7 @@ impl BLSAG {
 
         // Hash of message is shared by all challenges H_n(m, ....)
         let mut message_hash = H::default();
+        message_hash.update(b"nazgul-chal-v3");
         message_hash.update(message);
 
         let mut h = message_hash.clone();
@@ -87,7 +91,9 @@ impl BLSAG {
         );
         h.update(
             (a.0 * RistrettoPoint::from_hash(
-                H::default().chain_update(k_point.compress().as_bytes()),
+                H::default()
+                    .chain_update(b"nazgul-H_p-v3")
+                    .chain_update(k_point.compress().as_bytes()),
             ))
             .compress()
             .as_bytes(),
@@ -177,7 +183,7 @@ impl BLSAG {
         }
 
         // After the loop, `current_challenge` holds the challenge for the signer (c_{secret_index}).
-        rs[secret_index] = a.0 - (current_challenge * k);
+        rs[secret_index] = a.0 - (current_challenge * k.0);
 
         Ok(BLSAG {
             challenge: c_0,
@@ -199,14 +205,17 @@ impl BLSAG {
     >(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         rng: &mut R,
     ) -> Result<SigningPrecomputation, SignatureError> {
+        // Wrap the secret key for zeroization on scope exit.
+        let k = SecretScalar(k);
+
         if !ring.is_decompressed() {
             return Err(SignatureError::CompressedRing);
         }
         let ring_members = ring.members();
-        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+        let k_point: RistrettoPoint = k.0 * constants::RISTRETTO_BASEPOINT_POINT;
 
         let secret_index = ring_members
             .binary_search_by_key(&k_point.compress().to_bytes(), |p| p.compress().to_bytes())
@@ -223,7 +232,7 @@ impl BLSAG {
             }
         }
 
-        let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k);
+        let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k.0);
 
         let alpha = Scalar::random(rng);
         let alpha_g = alpha * constants::RISTRETTO_BASEPOINT_POINT;
@@ -231,7 +240,11 @@ impl BLSAG {
         let hp_signer = precomputed_data
             .map(|d| d.hashed_points()[secret_index])
             .unwrap_or_else(|| {
-                RistrettoPoint::from_hash(H::default().chain_update(k_point.compress().as_bytes()))
+                RistrettoPoint::from_hash(
+                    H::default()
+                        .chain_update(b"nazgul-H_p-v3")
+                        .chain_update(k_point.compress().as_bytes()),
+                )
             });
         let alpha_hp = alpha * hp_signer;
 
@@ -245,7 +258,7 @@ impl BLSAG {
             signer_index: secret_index,
             key_image,
             responses,
-            secret_key: SecretScalar(k),
+            secret_key: k,
         })
     }
 
@@ -258,7 +271,7 @@ impl BLSAG {
     pub fn sign_precomputed<H: Digest<OutputSize = U64> + Clone + Default>(
         precomp: SigningPrecomputation,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
     ) -> Result<BLSAG, SignatureError> {
         if !ring.is_decompressed() {
@@ -300,6 +313,7 @@ impl BLSAG {
 
         // Build the message hash prefix shared by all challenge computations.
         let mut message_hash = H::default();
+        message_hash.update(b"nazgul-chal-v3");
         message_hash.update(message);
 
         // Compute c_{secret_index + 1} from the precomputed alpha commitments.
@@ -398,7 +412,7 @@ impl BLSAG {
     >(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
         rng: &mut R,
         mut progress: impl FnMut(usize, usize),
@@ -415,8 +429,11 @@ impl KeyImageGen<Scalar, RistrettoPoint> for BLSAG {
     ) -> RistrettoPoint {
         let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
 
-        let key_image: RistrettoPoint =
-            k * RistrettoPoint::from_hash(H::default().chain_update(k_point.compress().as_bytes()));
+        let key_image: RistrettoPoint = k * RistrettoPoint::from_hash(
+            H::default()
+                .chain_update(b"nazgul-H_p-v3")
+                .chain_update(k_point.compress().as_bytes()),
+        );
 
         key_image
     }
@@ -431,7 +448,7 @@ impl SignRef<Scalar> for BLSAG {
     >(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
     ) -> Result<BLSAG, SignatureError> {
         let mut csprng = CSPRNG::default();

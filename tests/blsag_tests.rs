@@ -212,7 +212,7 @@ fn sign_and_verify_with_precomputation_succeeds() {
 
     // 1. Generate and verify the precomputed data
     let precomputed_data = ring.precompute::<Sha512>();
-    assert!(precomputed_data.verify::<Sha512>(&ring));
+    assert!(precomputed_data.verify(&ring));
 
     // 2. Sign using the precomputed data
     let signature =
@@ -235,7 +235,7 @@ fn sign_and_verify_with_precomputation_succeeds() {
     let other_ring = Ring::new(generate_ring(&mut csprng, num_decoys + 1));
     let bad_precomputed_data = other_ring.precompute::<Sha512>();
     assert!(
-        !precomputed_data.verify::<Sha512>(&other_ring),
+        !precomputed_data.verify(&other_ring),
         "Verification of precomputed data should fail for the wrong ring"
     );
     assert!(
@@ -290,14 +290,14 @@ fn golden_vector_deterministic_signature() {
 
     assert!(BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE));
 
-    // Frozen golden values from ChaCha20Rng(seed=42)
+    // Frozen golden values from ChaCha20Rng(seed=42), v3 domain separation
     let expected_challenge: [u8; 32] = [
-        7, 210, 88, 111, 130, 146, 45, 246, 211, 249, 40, 71, 53, 255, 91, 141, 79, 148, 106, 53,
-        238, 53, 9, 63, 66, 86, 237, 24, 199, 162, 47, 15,
+        208, 19, 112, 217, 153, 253, 45, 149, 140, 127, 78, 118, 165, 225, 18, 37, 19, 127, 117,
+        230, 162, 54, 203, 38, 216, 222, 55, 224, 55, 173, 222, 3,
     ];
     let expected_key_image: [u8; 32] = [
-        178, 28, 233, 188, 154, 108, 58, 91, 230, 6, 43, 125, 204, 142, 66, 74, 121, 72, 176, 86,
-        16, 7, 21, 82, 34, 60, 78, 48, 9, 48, 15, 109,
+        42, 197, 164, 195, 29, 143, 31, 39, 79, 196, 234, 50, 42, 163, 113, 116, 180, 41, 199, 5,
+        45, 175, 16, 242, 28, 87, 252, 36, 221, 72, 193, 123,
     ];
     let expected_responses: [[u8; 32]; 4] = [
         [
@@ -313,8 +313,8 @@ fn golden_vector_deterministic_signature() {
             217, 77, 30, 174, 199, 140, 202, 83, 180, 162, 190, 128, 13,
         ],
         [
-            163, 94, 190, 155, 113, 219, 56, 147, 136, 36, 111, 76, 55, 72, 80, 191, 24, 224, 159,
-            239, 227, 248, 180, 57, 229, 36, 0, 52, 165, 242, 223, 3,
+            119, 135, 87, 151, 55, 253, 30, 48, 119, 29, 227, 63, 96, 216, 13, 154, 92, 1, 60, 55,
+            18, 92, 202, 124, 251, 246, 190, 63, 245, 214, 118, 1,
         ],
     ];
 
@@ -641,4 +641,27 @@ fn precomputed_signing_linkability() {
         BLSAG::link(&sig_1, &sig_2),
         "Precomputed signatures from the same signer must be linkable"
     );
+}
+
+// ==============
+// BLAKE3 TESTS
+// ==============
+
+#[cfg(feature = "blake3")]
+#[test]
+fn blake3_sign_verify_roundtrip() {
+    use nazgul::blake3_compat::Blake3_512;
+
+    let mut csprng = OsRng;
+    let kp = KeyPair::generate(&mut csprng);
+    let k = *kp.secret().unwrap();
+
+    let mut public_keys = generate_ring(&mut csprng, 7);
+    public_keys.push(*kp.public());
+    let ring = Ring::new(public_keys);
+
+    let signature = BLSAG::sign::<Blake3_512, OsRng>(k, &ring, None, MESSAGE).unwrap();
+    assert!(BLSAG::verify::<Blake3_512>(
+        &signature, &ring, None, MESSAGE
+    ));
 }

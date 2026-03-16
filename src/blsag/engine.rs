@@ -35,7 +35,11 @@ pub(super) fn hash_ring_member_components<H: Digest<OutputSize = U64> + Clone + 
     );
 
     let pk_hash = precomputed_pk_hash.unwrap_or_else(|| {
-        RistrettoPoint::from_hash(H::default().chain_update(public_key.compress().as_bytes()))
+        RistrettoPoint::from_hash(
+            H::default()
+                .chain_update(b"nazgul-H_p-v3")
+                .chain_update(public_key.compress().as_bytes()),
+        )
     });
 
     h.update(
@@ -70,7 +74,11 @@ pub(super) fn hash_ring_member_optimized<H: Digest<OutputSize = U64> + Clone + D
     );
 
     let pk_hash = precomputed_pk_hash.unwrap_or_else(|| {
-        RistrettoPoint::from_hash(H::default().chain_update(public_key.compress().as_bytes()))
+        RistrettoPoint::from_hash(
+            H::default()
+                .chain_update(b"nazgul-H_p-v3")
+                .chain_update(public_key.compress().as_bytes()),
+        )
     });
 
     // R = response * H_p(P) + challenge * key_image

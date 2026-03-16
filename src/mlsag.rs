@@ -45,7 +45,9 @@ impl KeyImageGen<Vec<Scalar>, Vec<RistrettoPoint>> for MLSAG {
             .map(|j| {
                 ks[j]
                     * RistrettoPoint::from_hash(
-                        Hash::default().chain_update(k_points[j].compress().as_bytes()),
+                        Hash::default()
+                            .chain_update(b"nazgul-H_p-v3")
+                            .chain_update(k_points[j].compress().as_bytes()),
                     )
             })
             .collect();
@@ -94,7 +96,7 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for MLSAG {
 
         // Hash of message is shared by all challenges H_n(m, ....)
         let mut message_hash = Hash::default();
-
+        message_hash.update(b"nazgul-chal-v3");
         message_hash.update(message);
 
         let mut hashes: Vec<Hash> = (0..nr).map(|_| message_hash.clone()).collect();
@@ -108,7 +110,9 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for MLSAG {
             hashes[(secret_index + 1) % nr].update(
                 (a[j]
                     * RistrettoPoint::from_hash(
-                        Hash::default().chain_update(k_points[j].compress().as_bytes()),
+                        Hash::default()
+                            .chain_update(b"nazgul-H_p-v3")
+                            .chain_update(k_points[j].compress().as_bytes()),
                     ))
                 .compress()
                 .as_bytes(),
@@ -133,7 +137,9 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for MLSAG {
                         &[rs[i % nr][j], cs[i % nr]],
                         &[
                             RistrettoPoint::from_hash(
-                                Hash::default().chain_update(ring[i % nr][j].compress().as_bytes()),
+                                Hash::default()
+                                    .chain_update(b"nazgul-H_p-v3")
+                                    .chain_update(ring[i % nr][j].compress().as_bytes()),
                             ),
                             *key_image,
                         ],
@@ -179,6 +185,7 @@ impl Verify for MLSAG {
         let nc = signature.ring[0].len();
         for _i in 0..nr {
             let mut h: Hash = Hash::default();
+            h.update(b"nazgul-chal-v3");
             h.update(message);
 
             for (j, key_image) in signature.key_images.iter().enumerate().take(nc) {
@@ -197,6 +204,7 @@ impl Verify for MLSAG {
                         &[
                             RistrettoPoint::from_hash(
                                 Hash::default()
+                                    .chain_update(b"nazgul-H_p-v3")
                                     .chain_update(signature.ring[_i][j].compress().as_bytes()),
                             ),
                             *key_image,

@@ -51,5 +51,8 @@ pub mod sag;
 pub mod scalar;
 pub mod traits;
 
+#[cfg(feature = "blake3")]
+pub mod blake3_compat;
+
 #[cfg(feature = "wasm")]
 pub mod wasm;

@@ -45,7 +45,7 @@ impl ContextualBLSAG {
     >(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
     ) -> Result<Self, SignatureError> {
         let signature = BLSAG::sign::<H, CSPRNG>(k, ring, precomputed_data, message)?;
@@ -64,7 +64,7 @@ impl ContextualBLSAG {
     >(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
     ) -> Result<Self, SignatureError> {
         let signature = BLSAG::sign::<H, CSPRNG>(k, ring, precomputed_data, message)?;
@@ -107,7 +107,7 @@ impl ContextualBLSAG {
     pub fn verify<H: Digest<OutputSize = U64> + Clone + Default>(
         &self,
         external_ring: Option<&Ring>,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
     ) -> bool {
         match &self.context {
