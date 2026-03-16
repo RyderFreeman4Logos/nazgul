@@ -5,11 +5,16 @@ extern crate sha2;
 extern crate sha3;
 
 use super::*;
-use crate::traits::SignRef;
+use crate::traits::{SignRef, VerifyRef};
 use blake2::Blake2b512;
 use curve25519_dalek::constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
+#[cfg(feature = "optimized-msm")]
+use curve25519_dalek::ristretto::VartimeRistrettoPrecomputation;
 use curve25519_dalek::scalar::Scalar;
+#[cfg(feature = "optimized-msm")]
+use curve25519_dalek::traits::VartimePrecomputedMultiscalarMul;
+use digest::Digest;
 use rand::rngs::OsRng;
 use sha2::Sha512;
 use sha3::Keccak512;
