@@ -155,26 +155,19 @@ Benchmark results are saved to `target/criterion/` with HTML reports.
 For repeated operations on the same ring, use `Ring::precompute()` to create
 a `PreparedRing` that caches the vartime precomputation tables:
 
-```rust
+```text
 use nazgul::blsag::BLSAG;
-use nazgul::keypair::KeyPair;
 use nazgul::ring::Ring;
 use nazgul::traits::{SignRef, VerifyRef};
-use rand_core::OsRng;
-use sha2::Sha512;
 
-let mut rng = OsRng;
-let (secret_key, public_key) = KeyPair::generate(&mut rng).into_keys();
-// ... build ring containing public_key ...
+// Precompute once per ring
 let prepared = ring.precompute::<Sha512>();
 
-// Sign: k is the signer's secret key (Scalar)
-let sig = BLSAG::sign_with_rng::<Sha512, _>(
-    secret_key, &ring, Some(&prepared), message, &mut rng,
-)?;
+// Sign: k is the signer's Scalar secret key, rng is &mut impl CryptoRng + RngCore
+let sig = BLSAG::sign_with_rng::<Sha512, _>(k, &ring, Some(&prepared), msg, &mut rng)?;
 
-// Verify: uses the VerifyRef trait (import required)
-let ok = BLSAG::verify::<Sha512>(&sig, &ring, Some(&prepared), message);
+// Verify: VerifyRef trait import required
+let ok = BLSAG::verify::<Sha512>(&sig, &ring, Some(&prepared), msg);
 ```
 
 `PreparedRing` is bound to its ring via `RingHash`. Passing it to a different
