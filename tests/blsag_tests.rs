@@ -642,3 +642,26 @@ fn precomputed_signing_linkability() {
         "Precomputed signatures from the same signer must be linkable"
     );
 }
+
+// ==============
+// BLAKE3 TESTS
+// ==============
+
+#[cfg(feature = "blake3")]
+#[test]
+fn blake3_sign_verify_roundtrip() {
+    use nazgul::blake3_compat::Blake3_512;
+
+    let mut csprng = OsRng;
+    let kp = KeyPair::generate(&mut csprng);
+    let k = *kp.secret().unwrap();
+
+    let mut public_keys = generate_ring(&mut csprng, 7);
+    public_keys.push(*kp.public());
+    let ring = Ring::new(public_keys);
+
+    let signature = BLSAG::sign::<Blake3_512, OsRng>(k, &ring, None, MESSAGE).unwrap();
+    assert!(BLSAG::verify::<Blake3_512>(
+        &signature, &ring, None, MESSAGE
+    ));
+}
