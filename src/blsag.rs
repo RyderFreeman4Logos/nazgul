@@ -74,6 +74,15 @@ use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+/// Response vector type: uses `SmallVec<[Scalar; 16]>` when the `smallvec-responses`
+/// feature is enabled (inline storage for rings up to 16 members), otherwise
+/// falls back to `Vec<Scalar>`.
+#[cfg(feature = "smallvec-responses")]
+pub(crate) type ResponseVec = smallvec::SmallVec<[Scalar; 16]>;
+
+#[cfg(not(feature = "smallvec-responses"))]
+pub(crate) type ResponseVec = Vec<Scalar>;
+
 /// A wrapper around a BLSAG signature that includes ring context information.
 ///
 /// This structure allows for two modes of operation:
@@ -375,7 +384,7 @@ pub struct SigningPrecomputation {
     /// Key image (`k * H_p(K)`).
     key_image: RistrettoPoint,
     /// Pre-generated random responses for every ring member.
-    responses: Vec<Scalar>,
+    responses: ResponseVec,
     /// The signer's secret key (zeroized on drop via `SecretScalar`).
     secret_key: SecretScalar,
 }
@@ -412,7 +421,7 @@ impl ZeroizeOnDrop for SecretScalar {}
 #[derive(Clone, Debug)]
 pub struct BLSAG {
     challenge: Scalar,
-    responses: Vec<Scalar>,
+    responses: ResponseVec,
     key_image: RistrettoPoint,
 }
 
@@ -438,9 +447,10 @@ impl BLSAG {
     /// fields need to be modified independently.
     pub fn from_parts(
         challenge: Scalar,
-        responses: Vec<Scalar>,
+        responses: impl Into<ResponseVec>,
         key_image: RistrettoPoint,
     ) -> Self {
+        let responses = responses.into();
         Self {
             challenge,
             responses,
@@ -505,7 +515,7 @@ impl BLSAG {
 
         let a = SecretScalar(Scalar::random(rng));
 
-        let mut rs: Vec<Scalar> = (0..n).map(|_| Scalar::random(rng)).collect();
+        let mut rs: ResponseVec = (0..n).map(|_| Scalar::random(rng)).collect();
 
         // Hash of message is shared by all challenges H_n(m, ....)
         let mut message_hash = H::default();
@@ -667,7 +677,7 @@ impl BLSAG {
             });
         let alpha_hp = alpha * hp_signer;
 
-        let responses: Vec<Scalar> = (0..n).map(|_| Scalar::random(rng)).collect();
+        let responses: ResponseVec = (0..n).map(|_| Scalar::random(rng)).collect();
 
         Ok(SigningPrecomputation {
             alpha: SecretScalar(alpha),
@@ -933,7 +943,7 @@ impl BLSAG {
         let n = ring.len();
 
         let challenge = Scalar::random(&mut csprng);
-        let responses: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut csprng)).collect();
+        let responses: ResponseVec = (0..n).map(|_| Scalar::random(&mut csprng)).collect();
         let key_image = RistrettoPoint::random(&mut csprng);
 
         BLSAG {
