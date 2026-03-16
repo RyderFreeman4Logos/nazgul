@@ -212,7 +212,7 @@ fn sign_and_verify_with_precomputation_succeeds() {
 
     // 1. Generate and verify the precomputed data
     let precomputed_data = ring.precompute::<Sha512>();
-    assert!(precomputed_data.verify::<Sha512>(&ring));
+    assert!(precomputed_data.verify(&ring));
 
     // 2. Sign using the precomputed data
     let signature =
@@ -235,7 +235,7 @@ fn sign_and_verify_with_precomputation_succeeds() {
     let other_ring = Ring::new(generate_ring(&mut csprng, num_decoys + 1));
     let bad_precomputed_data = other_ring.precompute::<Sha512>();
     assert!(
-        !precomputed_data.verify::<Sha512>(&other_ring),
+        !precomputed_data.verify(&other_ring),
         "Verification of precomputed data should fail for the wrong ring"
     );
     assert!(

@@ -1,6 +1,7 @@
 //! Module for the `Ring` structure, ensuring sorted public keys for efficient signing.
 
 use crate::prelude::*;
+use core::marker::PhantomData;
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use digest::{generic_array::typenum::U64, Digest};
 use sha3::Sha3_512;
@@ -92,18 +93,25 @@ impl RingContext {
 
 /// A prepared (pre-computed) form of a [`Ring`] that accelerates cryptographic operations.
 ///
+/// The type parameter `H` binds the precomputed data to a specific hash function
+/// at compile time. This prevents accidentally using a `PreparedRing<Sha512>`
+/// with a `verify::<Blake2b512>()` call — the compiler will reject the mismatch.
+///
 /// This structure holds the results of hashing each public key in the ring onto the curve,
 /// along with the canonical [`RingHash`] of the ring it was computed from. The `ring_hash`
 /// is checked during signing and verification to ensure the prepared data matches
 /// the ring being used.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct PreparedRing {
+#[cfg_attr(feature = "serde", serde(bound(serialize = "", deserialize = "")))]
+pub struct PreparedRing<H> {
     ring_hash: RingHash,
     hashed_points: Vec<RistrettoPoint>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    _hash: PhantomData<H>,
 }
 
-impl PreparedRing {
+impl<H> PreparedRing<H> {
     /// Returns a slice of the pre-computed hashed points.
     pub fn hashed_points(&self) -> &[RistrettoPoint] {
         &self.hashed_points
@@ -122,7 +130,9 @@ impl PreparedRing {
     pub fn is_valid_for(&self, ring: &Ring) -> bool {
         self.ring_hash == ring.canonical_hash()
     }
+}
 
+impl<H: Digest<OutputSize = U64> + Clone + Default> PreparedRing<H> {
     /// Verifies that the pre-computed data is valid for the given `Ring`.
     ///
     /// This is a crucial security step. It checks that the canonical ring hash matches,
@@ -132,7 +142,7 @@ impl PreparedRing {
     /// # Panics
     ///
     /// Panics if the ring is in `Compressed` state. Call `decompress()` first.
-    pub fn verify<H: Digest<OutputSize = U64> + Clone + Default>(&self, ring: &Ring) -> bool {
+    pub fn verify(&self, ring: &Ring) -> bool {
         if self.ring_hash != ring.canonical_hash() {
             return false;
         }
@@ -363,7 +373,7 @@ impl Ring {
     /// # Panics
     ///
     /// Panics if the ring is in `Compressed` state. Call `decompress()` first.
-    pub fn precompute<H: Digest<OutputSize = U64> + Clone + Default>(&self) -> PreparedRing {
+    pub fn precompute<H: Digest<OutputSize = U64> + Clone + Default>(&self) -> PreparedRing<H> {
         let members = self.members();
         let hashed_points = members
             .iter()
@@ -378,6 +388,7 @@ impl Ring {
         PreparedRing {
             ring_hash: self.canonical_hash(),
             hashed_points,
+            _hash: PhantomData,
         }
     }
 
@@ -751,7 +762,7 @@ mod tests {
             "PreparedRing from Full must be valid for equivalent decompressed ring"
         );
         assert!(
-            prepared.verify::<Sha3_512>(&decompressed),
+            prepared.verify(&decompressed),
             "PreparedRing full verify must pass against equivalent decompressed ring"
         );
     }

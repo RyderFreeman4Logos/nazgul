@@ -27,7 +27,7 @@ impl BLSAG {
     pub fn verify_with_progress<H: Digest<OutputSize = U64> + Clone + Default>(
         signature: &BLSAG,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
         mut progress: impl FnMut(usize, usize),
     ) -> bool {
@@ -102,7 +102,7 @@ impl VerifyRef for BLSAG {
     fn verify<H: Digest<OutputSize = U64> + Clone + Default>(
         signature: &BLSAG,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
     ) -> bool {
         if !ring.is_decompressed() {

@@ -27,7 +27,7 @@ impl BLSAG {
     pub fn sign_with_rng<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
         rng: &mut R,
     ) -> Result<BLSAG, SignatureError> {
@@ -40,7 +40,7 @@ impl BLSAG {
     fn sign_inner<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
         rng: &mut R,
         mut progress: Option<&mut dyn FnMut(usize, usize)>,
@@ -205,7 +205,7 @@ impl BLSAG {
     >(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         rng: &mut R,
     ) -> Result<SigningPrecomputation, SignatureError> {
         // Wrap the secret key for zeroization on scope exit.
@@ -271,7 +271,7 @@ impl BLSAG {
     pub fn sign_precomputed<H: Digest<OutputSize = U64> + Clone + Default>(
         precomp: SigningPrecomputation,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
     ) -> Result<BLSAG, SignatureError> {
         if !ring.is_decompressed() {
@@ -412,7 +412,7 @@ impl BLSAG {
     >(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
         rng: &mut R,
         mut progress: impl FnMut(usize, usize),
@@ -448,7 +448,7 @@ impl SignRef<Scalar> for BLSAG {
     >(
         k: Scalar,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
     ) -> Result<BLSAG, SignatureError> {
         let mut csprng = CSPRNG::default();

@@ -49,7 +49,7 @@ pub trait VerifyRef {
     fn verify<Hash: Digest<OutputSize = U64> + Clone + Default>(
         signature: &Self,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<Hash>>,
         message: &[u8],
     ) -> bool;
 }
@@ -67,7 +67,7 @@ pub trait SignRef<Secret> {
     >(
         k: Secret,
         ring: &Ring,
-        precomputed_data: Option<&PreparedRing>,
+        precomputed_data: Option<&PreparedRing<Hash>>,
         message: &[u8],
     ) -> Result<Self, SignatureError>
     where
