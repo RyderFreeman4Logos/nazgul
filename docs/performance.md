@@ -54,12 +54,31 @@ beneficial for the curve25519-dalek inlined arithmetic.
 
 | Feature | Default | Effect |
 |---------|---------|--------|
-| `std` | yes | Full standard library support; enables `precomputed-tables` in curve25519-dalek |
+| `std` | yes | Full standard library; enables `precomputed-tables` in curve25519-dalek (cached basepoint multiplication table for faster `r_i * G` in BLSAG verify L equation) |
 | `optimized-msm` | yes | Uses `vartime_double_scalar_mul_basepoint` and `VartimeRistrettoPrecomputation` for faster sign/verify |
 | `serde-derive` | yes | Serde support for all public types; Ring serialises in compressed format |
 | `cpu-time` | yes | Enables `pow` module for CPU-time-based cost modelling |
 | `progress-callback` | no | Adds `sign_with_rng_and_progress` / `verify_with_progress` variants |
 | `no_std` | no | `#![no_std]` with `alloc`; base for `serde-derive` when `std` is off |
+
+## Hash Function Performance
+
+Nazgul's hash function is generic (`H: Digest<OutputSize = U64>`). The BLSAG
+verify hot path calls the hash once per ring member (`H(msg || L_j || R_j)`),
+so hash performance matters at large ring sizes.
+
+Different hash implementations have different SIMD acceleration profiles:
+
+| Hash | `target-cpu=native` benefit | wasm32 + SIMD128 benefit |
+|------|----------------------------|--------------------------|
+| SHA-512 | Moderate (AVX2 message scheduling) | None |
+| BLAKE2b | Good (AVX2 G function) | None |
+| SHA3/Keccak | Minimal (bitwise ops, no SIMD path) | None |
+| BLAKE3 | Excellent (AVX2/AVX-512 compression) | Possible (see [BLAKE3#116](https://github.com/BLAKE3-team/BLAKE3/issues/116)) |
+
+> **WASM note**: While `-C target-feature=+simd128` does not affect dalek's
+> field arithmetic on wasm32, it may benefit hash functions with SIMD support.
+> The impact depends on your chosen `H: Digest` implementation.
 
 ## curve25519-dalek Backend Selection
 
@@ -72,7 +91,7 @@ based on detected CPU features. On other architectures, only `serial` is used.
 | x86_64 (64-bit) | `simd` with runtime dispatch | AVX2/AVX512 used if CPU supports it; falls back to `serial` |
 | i686 / x86 (32-bit) | `serial` | SIMD backend requires 64-bit target |
 | aarch64 | `serial` | No NEON backend for dalek field ops in 4.x |
-| wasm32 | `serial` | `fiat` backend only via explicit `RUSTFLAGS='--cfg curve25519_dalek_backend="fiat"'` override |
+| wasm32 | `serial` (default) | Fiat (formally verified) backend available via explicit `RUSTFLAGS='--cfg curve25519_dalek_backend="fiat"'` override |
 
 The `simd` (AVX2) backend provides ~30-40% speedup for scalar multiplication
 over the `serial` backend. Verify which backend is active:
@@ -136,14 +155,18 @@ Benchmark results are saved to `target/criterion/` with HTML reports.
 For repeated operations on the same ring, use `Ring::precompute()` to create
 a `PreparedRing` that caches the vartime precomputation tables:
 
-```rust
+```text
+use nazgul::blsag::BLSAG;
+use nazgul::ring::Ring;
 use nazgul::traits::{SignRef, VerifyRef};
 
-let ring = Ring::new(members);
+// Precompute once per ring
 let prepared = ring.precompute::<Sha512>();
 
-// Reuse prepared data across multiple sign/verify calls
-let sig = BLSAG::sign_with_rng::<Sha512, _>(secret_key, &ring, Some(&prepared), msg, &mut rng)?;
+// Sign: k is the signer's Scalar secret key, rng is &mut impl CryptoRng + RngCore
+let sig = BLSAG::sign_with_rng::<Sha512, _>(k, &ring, Some(&prepared), msg, &mut rng)?;
+
+// Verify: VerifyRef trait import required
 let ok = BLSAG::verify::<Sha512>(&sig, &ring, Some(&prepared), msg);
 ```
 
