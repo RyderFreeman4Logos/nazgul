@@ -45,19 +45,22 @@ impl BLSAG {
         rng: &mut R,
         mut progress: Option<&mut dyn FnMut(usize, usize)>,
     ) -> Result<BLSAG, SignatureError> {
+        // Wrap the secret key for zeroization on scope exit.
+        let k = SecretScalar(k);
+
         if !ring.is_decompressed() {
             return Err(SignatureError::CompressedRing);
         }
         let ring_members = ring.members();
 
         // Prover's public key
-        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+        let k_point: RistrettoPoint = k.0 * constants::RISTRETTO_BASEPOINT_POINT;
 
         let secret_index = ring_members
             .binary_search_by_key(&k_point.compress().to_bytes(), |p| p.compress().to_bytes())
             .map_err(|_| SignatureError::SignerNotFound)?;
 
-        let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k);
+        let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k.0);
 
         let n = ring_members.len();
 
@@ -177,7 +180,7 @@ impl BLSAG {
         }
 
         // After the loop, `current_challenge` holds the challenge for the signer (c_{secret_index}).
-        rs[secret_index] = a.0 - (current_challenge * k);
+        rs[secret_index] = a.0 - (current_challenge * k.0);
 
         Ok(BLSAG {
             challenge: c_0,
@@ -202,11 +205,14 @@ impl BLSAG {
         precomputed_data: Option<&PreparedRing>,
         rng: &mut R,
     ) -> Result<SigningPrecomputation, SignatureError> {
+        // Wrap the secret key for zeroization on scope exit.
+        let k = SecretScalar(k);
+
         if !ring.is_decompressed() {
             return Err(SignatureError::CompressedRing);
         }
         let ring_members = ring.members();
-        let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
+        let k_point: RistrettoPoint = k.0 * constants::RISTRETTO_BASEPOINT_POINT;
 
         let secret_index = ring_members
             .binary_search_by_key(&k_point.compress().to_bytes(), |p| p.compress().to_bytes())
@@ -223,7 +229,7 @@ impl BLSAG {
             }
         }
 
-        let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k);
+        let key_image: RistrettoPoint = BLSAG::generate_key_image::<H>(k.0);
 
         let alpha = Scalar::random(rng);
         let alpha_g = alpha * constants::RISTRETTO_BASEPOINT_POINT;
@@ -245,7 +251,7 @@ impl BLSAG {
             signer_index: secret_index,
             key_image,
             responses,
-            secret_key: SecretScalar(k),
+            secret_key: k,
         })
     }
 
