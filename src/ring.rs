@@ -142,7 +142,13 @@ impl PreparedRing {
         }
         let expected_points: Vec<RistrettoPoint> = members
             .iter()
-            .map(|p| RistrettoPoint::from_hash(H::default().chain_update(p.compress().to_bytes())))
+            .map(|p| {
+                RistrettoPoint::from_hash(
+                    H::default()
+                        .chain_update(b"nazgul-H_p-v3")
+                        .chain_update(p.compress().to_bytes()),
+                )
+            })
             .collect();
 
         self.hashed_points == expected_points
@@ -361,7 +367,13 @@ impl Ring {
         let members = self.members();
         let hashed_points = members
             .iter()
-            .map(|p| RistrettoPoint::from_hash(H::default().chain_update(p.compress().to_bytes())))
+            .map(|p| {
+                RistrettoPoint::from_hash(
+                    H::default()
+                        .chain_update(b"nazgul-H_p-v3")
+                        .chain_update(p.compress().to_bytes()),
+                )
+            })
             .collect();
         PreparedRing {
             ring_hash: self.canonical_hash(),

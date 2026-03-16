@@ -168,7 +168,9 @@ fn blsag_optimized_msm_cross_validation() {
     assert!(valid, "optimized MSM verify must accept valid signature");
 
     // Manually run the generic path and compare challenge chains
-    let message_hash = Sha512::default().chain_update(message);
+    let message_hash = Sha512::default()
+        .chain_update(b"nazgul-chal-v3")
+        .chain_update(message);
     let ring_members = ring.members();
     let ki_table = VartimeRistrettoPrecomputation::new([signature.key_image]);
 

@@ -80,6 +80,7 @@ impl BLSAG {
 
         // Hash of message is shared by all challenges H_n(m, ....)
         let mut message_hash = H::default();
+        message_hash.update(b"nazgul-chal-v3");
         message_hash.update(message);
 
         let mut h = message_hash.clone();
@@ -90,7 +91,9 @@ impl BLSAG {
         );
         h.update(
             (a.0 * RistrettoPoint::from_hash(
-                H::default().chain_update(k_point.compress().as_bytes()),
+                H::default()
+                    .chain_update(b"nazgul-H_p-v3")
+                    .chain_update(k_point.compress().as_bytes()),
             ))
             .compress()
             .as_bytes(),
@@ -237,7 +240,11 @@ impl BLSAG {
         let hp_signer = precomputed_data
             .map(|d| d.hashed_points()[secret_index])
             .unwrap_or_else(|| {
-                RistrettoPoint::from_hash(H::default().chain_update(k_point.compress().as_bytes()))
+                RistrettoPoint::from_hash(
+                    H::default()
+                        .chain_update(b"nazgul-H_p-v3")
+                        .chain_update(k_point.compress().as_bytes()),
+                )
             });
         let alpha_hp = alpha * hp_signer;
 
@@ -306,6 +313,7 @@ impl BLSAG {
 
         // Build the message hash prefix shared by all challenge computations.
         let mut message_hash = H::default();
+        message_hash.update(b"nazgul-chal-v3");
         message_hash.update(message);
 
         // Compute c_{secret_index + 1} from the precomputed alpha commitments.
@@ -421,8 +429,11 @@ impl KeyImageGen<Scalar, RistrettoPoint> for BLSAG {
     ) -> RistrettoPoint {
         let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
 
-        let key_image: RistrettoPoint =
-            k * RistrettoPoint::from_hash(H::default().chain_update(k_point.compress().as_bytes()));
+        let key_image: RistrettoPoint = k * RistrettoPoint::from_hash(
+            H::default()
+                .chain_update(b"nazgul-H_p-v3")
+                .chain_update(k_point.compress().as_bytes()),
+        );
 
         key_image
     }

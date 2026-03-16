@@ -46,6 +46,7 @@ impl Sign<Scalar, Vec<RistrettoPoint>> for SAG {
         let mut rs: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut csprng)).collect();
         let mut cs: Vec<Scalar> = (0..n).map(|_| Scalar::ZERO).collect();
         let mut group_and_message_hash = Hash::new();
+        group_and_message_hash.update(b"nazgul-chal-v3");
         for k_point in &ring {
             group_and_message_hash.update(k_point.compress().as_bytes());
         }
@@ -94,6 +95,7 @@ impl Verify for SAG {
         let n = signature.ring.len();
         let mut reconstructed_c: Scalar = signature.challenge;
         let mut group_and_message_hash = Hash::new();
+        group_and_message_hash.update(b"nazgul-chal-v3");
         for k_point in &signature.ring {
             group_and_message_hash.update(k_point.compress().as_bytes());
         }

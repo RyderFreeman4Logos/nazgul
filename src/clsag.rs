@@ -48,7 +48,9 @@ impl KeyImageGen<Vec<Scalar>, Vec<RistrettoPoint>> for CLSAG {
         // This is the base key
         // i.e. the first public key for which the prover has the private key
         let base_key_hashed_to_point: RistrettoPoint = RistrettoPoint::from_hash(
-            Hash::default().chain_update(k_points[0].compress().as_bytes()),
+            Hash::default()
+                .chain_update(b"nazgul-H_p-v3")
+                .chain_update(k_points[0].compress().as_bytes()),
         );
 
         let key_images: Vec<RistrettoPoint> =
@@ -85,7 +87,9 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for CLSAG {
         // This is the base key
         // i.e. the first public key for which the prover has the private key
         let base_key_hashed_to_point: RistrettoPoint = RistrettoPoint::from_hash(
-            Hash::default().chain_update(k_points[0].compress().as_bytes()),
+            Hash::default()
+                .chain_update(b"nazgul-H_p-v3")
+                .chain_update(k_points[0].compress().as_bytes()),
         );
 
         let key_images: Vec<RistrettoPoint> = CLSAG::generate_key_image::<Hash>(ks.clone());
@@ -153,6 +157,7 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for CLSAG {
         let mut hashes: Vec<Hash> = (0..nr)
             .map(|_| {
                 let mut h: Hash = Hash::default();
+                h.update(b"nazgul-chal-v3");
                 h.update(b"CSLAG_c");
                 for row in ring.iter().take(nr) {
                     for key in row.iter().take(nc) {
@@ -192,7 +197,9 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for CLSAG {
                     &[rs[i % nr], cs[i % nr]],
                     &[
                         RistrettoPoint::from_hash(
-                            Hash::default().chain_update(ring[i % nr][0].compress().as_bytes()),
+                            Hash::default()
+                                .chain_update(b"nazgul-H_p-v3")
+                                .chain_update(ring[i % nr][0].compress().as_bytes()),
                         ),
                         aggregate_key_image,
                     ],
@@ -278,6 +285,7 @@ impl Verify for CLSAG {
             .sum();
         for (i, aggregate_public_key) in aggregate_public_keys.iter().enumerate().take(nr) {
             let mut h: Hash = Hash::default();
+            h.update(b"nazgul-chal-v3");
             h.update(b"CSLAG_c");
             for row in signature.ring.iter().take(nr) {
                 for key in row.iter().take(nc) {
@@ -299,7 +307,9 @@ impl Verify for CLSAG {
                     &[signature.responses[i], reconstructed_c],
                     &[
                         RistrettoPoint::from_hash(
-                            Hash::new().chain_update(signature.ring[i][0].compress().as_bytes()),
+                            Hash::new()
+                                .chain_update(b"nazgul-H_p-v3")
+                                .chain_update(signature.ring[i][0].compress().as_bytes()),
                         ),
                         aggregate_key_image,
                     ],

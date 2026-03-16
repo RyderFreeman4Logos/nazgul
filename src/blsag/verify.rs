@@ -35,7 +35,9 @@ impl BLSAG {
             return false;
         }
         let mut reconstructed_c: Scalar = signature.challenge;
-        let message_hash = H::default().chain_update(message);
+        let message_hash = H::default()
+            .chain_update(b"nazgul-chal-v3")
+            .chain_update(message);
         let ring_members = ring.members();
 
         let n = ring_members.len();
@@ -107,7 +109,9 @@ impl VerifyRef for BLSAG {
             return false;
         }
         let mut reconstructed_c: Scalar = signature.challenge;
-        let message_hash = H::default().chain_update(message);
+        let message_hash = H::default()
+            .chain_update(b"nazgul-chal-v3")
+            .chain_update(message);
         let ring_members = ring.members();
 
         // Length guards: never index untrusted inputs without validating sizes first.
