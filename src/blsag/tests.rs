@@ -5,7 +5,9 @@ extern crate sha2;
 extern crate sha3;
 
 use super::*;
+use crate::traits::SignRef;
 use blake2::Blake2b512;
+use curve25519_dalek::constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use rand::rngs::OsRng;
