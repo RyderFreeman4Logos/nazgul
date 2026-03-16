@@ -69,16 +69,41 @@ so hash performance matters at large ring sizes.
 
 Different hash implementations have different SIMD acceleration profiles:
 
-| Hash | `target-cpu=native` benefit | wasm32 + SIMD128 benefit |
-|------|----------------------------|--------------------------|
-| SHA-512 | Moderate (AVX2 message scheduling) | None |
-| BLAKE2b | Good (AVX2 G function) | None |
-| SHA3/Keccak | Minimal (bitwise ops, no SIMD path) | None |
-| BLAKE3 | Excellent (AVX2/AVX-512 compression) | Possible (see [BLAKE3#116](https://github.com/BLAKE3-team/BLAKE3/issues/116)) |
+| Hash | `target-cpu=native` benefit | wasm32 + SIMD128 benefit | Collision resistance |
+|------|----------------------------|--------------------------|---------------------|
+| SHA-512 | Moderate (AVX2 message scheduling) | None | 256-bit |
+| BLAKE2b | Good (AVX2 G function) | None | 256-bit |
+| SHA3/Keccak | Minimal (bitwise ops, no SIMD path) | None | 256-bit |
+| BLAKE3 (`blake3` feature) | Excellent (AVX2/AVX-512 compression) | Possible (see [BLAKE3#116](https://github.com/BLAKE3-team/BLAKE3/issues/116)) | 128-bit (matches Ristretto255 DLP) |
 
 > **WASM note**: While `-C target-feature=+simd128` does not affect dalek's
 > field arithmetic on wasm32, it may benefit hash functions with SIMD support.
 > The impact depends on your chosen `H: Digest` implementation.
+
+### BLAKE3 Feature
+
+Enable with `cargo build --features blake3`. The `Blake3_512` wrapper uses
+BLAKE3's XOF mode to produce 64-byte output suitable for
+`Digest<OutputSize = U64>`. BLAKE3 is not included in default features.
+
+```rust
+use nazgul::blake3_compat::Blake3_512;
+use nazgul::blsag::BLSAG;
+use nazgul::traits::{SignRef, VerifyRef};
+
+let sig = BLSAG::sign::<Blake3_512, OsRng>(k, &ring, None, msg)?;
+let ok = BLSAG::verify::<Blake3_512>(&sig, &ring, None, msg);
+```
+
+### Domain Separation (v3)
+
+Since v3.0.0, all hash invocations include domain separation tags:
+
+- **Hash-to-point** (`H_p`): prefixed with `b"nazgul-H_p-v3"`
+- **Challenge hash**: prefixed with `b"nazgul-chal-v3"`
+
+This prevents cross-protocol hash collisions. Signatures from v2.x are
+incompatible with v3.x due to the changed hash inputs.
 
 ## curve25519-dalek Backend Selection
 
@@ -170,6 +195,8 @@ let sig = BLSAG::sign_with_rng::<Sha512, _>(k, &ring, Some(&prepared), msg, &mut
 let ok = BLSAG::verify::<Sha512>(&sig, &ring, Some(&prepared), msg);
 ```
 
-`PreparedRing` is bound to its ring via `RingHash`. Passing it to a different
-ring causes `sign_with_rng` to return `Err(SignatureError::RingMismatch)` and
-`verify` to return `false`.
+`PreparedRing<H>` is bound to both its ring (via `RingHash`) and its hash
+function (via `PhantomData<H>`). Passing it to a different ring causes
+`sign_with_rng` to return `Err(SignatureError::RingMismatch)` and `verify`
+to return `false`. Attempting to use `PreparedRing<Sha512>` with
+`verify::<Blake2b512>()` is a compile error.
