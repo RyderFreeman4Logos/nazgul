@@ -49,3 +49,8 @@ audit:
 check-chinese:
     @echo "Checking for Chinese characters..."
     @! rg "\\p{Script=Han}" . --vimgrep --glob '!target/**' --glob '!.git/**' --glob '!.cargo-local/**' --glob '!mandate-dev-drafts/**'
+
+# Find files exceeding monolith thresholds (800 lines or 8000 tokens)
+find-monolith-files:
+    @echo "Checking for monolith files (>800 lines)..."
+    @find src -name '*.rs' -exec sh -c 'lines=$(wc -l < "$1"); if [ "$lines" -gt 800 ]; then echo "MONOLITH: $1 ($lines lines)"; fi' _ {} \;
