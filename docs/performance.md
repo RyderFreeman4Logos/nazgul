@@ -70,7 +70,7 @@ based on detected CPU features. On other architectures, only `serial` is used.
 | Target | Backend | Notes |
 |--------|---------|-------|
 | x86_64 (64-bit) | `simd` with runtime dispatch | AVX2/AVX512 used if CPU supports it; falls back to `serial` |
-| x86_64 (32-bit) | `serial` | SIMD backend requires 64-bit target |
+| i686 / x86 (32-bit) | `serial` | SIMD backend requires 64-bit target |
 | aarch64 | `serial` | No NEON backend for dalek field ops in 4.x |
 | wasm32 | `serial` | `fiat` backend only via explicit `RUSTFLAGS='--cfg curve25519_dalek_backend="fiat"'` override |
 
@@ -148,4 +148,5 @@ let ok = BLSAG::verify::<Sha512>(&sig, &ring, Some(&prepared), msg);
 ```
 
 `PreparedRing` is bound to its ring via `RingHash`. Passing it to a different
-ring returns `SignatureError::RingMismatch`.
+ring causes `sign_with_rng` to return `Err(SignatureError::RingMismatch)` and
+`verify` to return `false`.
