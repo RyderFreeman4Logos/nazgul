@@ -169,7 +169,7 @@ fn blsag_optimized_msm_cross_validation() {
     let mut c_optimized = signature.challenge;
 
     for (j, ring_member) in ring_members.iter().enumerate() {
-        c_generic = hash_ring_member_components::<Sha512>(
+        c_generic = engine::hash_ring_member_components::<Sha512>(
             &message_hash,
             signature.responses[j],
             c_generic,
@@ -177,7 +177,7 @@ fn blsag_optimized_msm_cross_validation() {
             signature.key_image,
             None,
         );
-        c_optimized = hash_ring_member_optimized::<Sha512>(
+        c_optimized = engine::hash_ring_member_optimized::<Sha512>(
             &message_hash,
             signature.responses[j],
             c_optimized,

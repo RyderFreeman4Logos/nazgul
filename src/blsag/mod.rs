@@ -55,6 +55,8 @@
 //! # }
 //! ```
 
+mod engine;
+
 use crate::prelude::*;
 use crate::ring::{PreparedRing, Ring, RingContext, RingHash};
 use crate::traits::{KeyImageGen, LinkRef, SignRef, VerifyRef};
@@ -63,8 +65,6 @@ use curve25519_dalek::ristretto::RistrettoPoint;
 #[cfg(feature = "optimized-msm")]
 use curve25519_dalek::ristretto::VartimeRistrettoPrecomputation;
 use curve25519_dalek::scalar::Scalar;
-#[cfg(any(not(feature = "optimized-msm"), test))]
-use curve25519_dalek::traits::VartimeMultiscalarMul;
 #[cfg(feature = "optimized-msm")]
 use curve25519_dalek::traits::VartimePrecomputedMultiscalarMul;
 use digest::generic_array::typenum::U64;
@@ -548,7 +548,7 @@ impl BLSAG {
         // We wrap around using cycle() and stop after processing n - 1 members.
         // The last member processed will be the one *before* the signer (secret_index - 1).
         let loop_len = n - 1;
-        let chunk = progress_chunk_size(loop_len);
+        let chunk = engine::progress_chunk_size(loop_len);
 
         #[cfg(feature = "optimized-msm")]
         {
@@ -562,7 +562,7 @@ impl BLSAG {
                 .take(loop_len)
                 .enumerate()
             {
-                let next_challenge = hash_ring_member_optimized::<H>(
+                let next_challenge = engine::hash_ring_member_optimized::<H>(
                     &message_hash,
                     rs[i],
                     current_challenge,
@@ -595,7 +595,7 @@ impl BLSAG {
                 .take(loop_len)
                 .enumerate()
             {
-                let next_challenge = hash_ring_member_components::<H>(
+                let next_challenge = engine::hash_ring_member_components::<H>(
                     &message_hash,
                     rs[i],
                     current_challenge,
@@ -769,7 +769,7 @@ impl BLSAG {
                 .skip(secret_index + 1)
                 .take(n - 1)
             {
-                let next_challenge = hash_ring_member_optimized::<H>(
+                let next_challenge = engine::hash_ring_member_optimized::<H>(
                     &message_hash,
                     rs[i],
                     current_challenge,
@@ -795,7 +795,7 @@ impl BLSAG {
                 .skip(secret_index + 1)
                 .take(n - 1)
             {
-                let next_challenge = hash_ring_member_components::<H>(
+                let next_challenge = engine::hash_ring_member_components::<H>(
                     &message_hash,
                     rs[i],
                     current_challenge,
@@ -886,14 +886,14 @@ impl BLSAG {
             }
         }
 
-        let chunk = progress_chunk_size(n);
+        let chunk = engine::progress_chunk_size(n);
 
         #[cfg(feature = "optimized-msm")]
         {
             let ki_table = VartimeRistrettoPrecomputation::new([signature.key_image]);
 
             for (j, ring_member) in ring_members.iter().enumerate() {
-                reconstructed_c = hash_ring_member_optimized::<H>(
+                reconstructed_c = engine::hash_ring_member_optimized::<H>(
                     &message_hash,
                     signature.responses[j],
                     reconstructed_c,
@@ -911,7 +911,7 @@ impl BLSAG {
         #[cfg(not(feature = "optimized-msm"))]
         {
             for (j, ring_member) in ring_members.iter().enumerate() {
-                reconstructed_c = hash_ring_member_components::<H>(
+                reconstructed_c = engine::hash_ring_member_components::<H>(
                     &message_hash,
                     signature.responses[j],
                     reconstructed_c,
@@ -952,84 +952,6 @@ impl BLSAG {
             key_image,
         }
     }
-}
-
-/// Private helper function to perform the core cryptographic hashing used in both
-/// signing and verification. This prevents code duplication.
-#[cfg(any(not(feature = "optimized-msm"), test))]
-fn hash_ring_member_components<H: Digest<OutputSize = U64> + Clone + Default>(
-    message_hash: &H,
-    response: Scalar,
-    challenge: Scalar,
-    public_key: RistrettoPoint,
-    key_image: RistrettoPoint,
-    precomputed_pk_hash: Option<RistrettoPoint>,
-) -> Scalar {
-    let mut h = message_hash.clone();
-    h.update(
-        RistrettoPoint::vartime_multiscalar_mul(
-            &[response, challenge],
-            &[constants::RISTRETTO_BASEPOINT_POINT, public_key],
-        )
-        .compress()
-        .as_bytes(),
-    );
-
-    let pk_hash = precomputed_pk_hash.unwrap_or_else(|| {
-        RistrettoPoint::from_hash(H::default().chain_update(public_key.compress().as_bytes()))
-    });
-
-    h.update(
-        RistrettoPoint::vartime_multiscalar_mul(&[response, challenge], &[pk_hash, key_image])
-            .compress()
-            .as_bytes(),
-    );
-    Scalar::from_hash(h)
-}
-
-/// Optimized hash helper using specialized MSM routines.
-///
-/// For L: uses `vartime_double_scalar_mul_basepoint` (2-scalar with known basepoint).
-/// For R: uses precomputed key_image table with `vartime_mixed_multiscalar_mul`.
-#[cfg(feature = "optimized-msm")]
-fn hash_ring_member_optimized<H: Digest<OutputSize = U64> + Clone + Default>(
-    message_hash: &H,
-    response: Scalar,
-    challenge: Scalar,
-    public_key: RistrettoPoint,
-    key_image_table: &VartimeRistrettoPrecomputation,
-    precomputed_pk_hash: Option<RistrettoPoint>,
-) -> Scalar {
-    let mut h = message_hash.clone();
-
-    // L = response * G + challenge * public_key
-    // vartime_double_scalar_mul_basepoint(a, A, b) = a*A + b*G
-    h.update(
-        RistrettoPoint::vartime_double_scalar_mul_basepoint(&challenge, &public_key, &response)
-            .compress()
-            .as_bytes(),
-    );
-
-    let pk_hash = precomputed_pk_hash.unwrap_or_else(|| {
-        RistrettoPoint::from_hash(H::default().chain_update(public_key.compress().as_bytes()))
-    });
-
-    // R = response * H_p(P) + challenge * key_image
-    // vartime_mixed_multiscalar_mul(static_scalars, dynamic_scalars, dynamic_points)
-    // where static_scalars correspond to the precomputed points (key_image),
-    // and dynamic_scalars/points are for non-precomputed points (pk_hash).
-    h.update(
-        key_image_table
-            .vartime_mixed_multiscalar_mul(&[challenge], &[response], &[pk_hash])
-            .compress()
-            .as_bytes(),
-    );
-    Scalar::from_hash(h)
-}
-
-///// Compute the chunk size for progress callbacks: ~10% of total, minimum 1.
-fn progress_chunk_size(total: usize) -> usize {
-    (total / 10).max(1)
 }
 
 impl KeyImageGen<Scalar, RistrettoPoint> for BLSAG {
@@ -1099,7 +1021,7 @@ impl VerifyRef for BLSAG {
             let ki_table = VartimeRistrettoPrecomputation::new([signature.key_image]);
 
             for (j, ring_member) in ring_members.iter().enumerate() {
-                reconstructed_c = hash_ring_member_optimized::<H>(
+                reconstructed_c = engine::hash_ring_member_optimized::<H>(
                     &message_hash,
                     signature.responses[j],
                     reconstructed_c,
@@ -1113,7 +1035,7 @@ impl VerifyRef for BLSAG {
         #[cfg(not(feature = "optimized-msm"))]
         {
             for (j, ring_member) in ring_members.iter().enumerate() {
-                reconstructed_c = hash_ring_member_components::<H>(
+                reconstructed_c = engine::hash_ring_member_components::<H>(
                     &message_hash,
                     signature.responses[j],
                     reconstructed_c,
