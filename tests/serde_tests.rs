@@ -127,33 +127,25 @@ fn test_ring_serde_compressed_roundtrip() {
     let deserialized_ring: Ring =
         serde_json::from_str(&serialized).expect("Failed to deserialize ring");
 
-    // Deserialized ring is in Compressed state
+    // Deserialized ring is auto-decompressed (Full state) so that
+    // downstream code can call .members() / .precompute() immediately.
     assert!(
-        !deserialized_ring.is_decompressed(),
-        "Deserialized ring should be in Compressed state"
+        deserialized_ring.is_decompressed(),
+        "Deserialized ring should be auto-decompressed to Full state"
     );
 
-    // Canonical hash is preserved even in Compressed state
+    // Canonical hash is preserved
     assert_eq!(
         original_hash,
         deserialized_ring.canonical_hash(),
         "Hash mismatch after serde roundtrip"
     );
 
-    // After decompress(), ring is Full and usable
-    let decompressed_ring = deserialized_ring
-        .decompress()
-        .expect("Decompression failed");
-    assert!(decompressed_ring.is_decompressed());
-    assert_eq!(
-        original_hash,
-        decompressed_ring.canonical_hash(),
-        "Hash mismatch after decompress"
-    );
+    // Members match the original
     assert_eq!(
         ring.members(),
-        decompressed_ring.members(),
-        "Members mismatch after serde roundtrip + decompress"
+        deserialized_ring.members(),
+        "Members mismatch after serde roundtrip"
     );
 }
 
@@ -204,11 +196,11 @@ fn contextual_blsag_archival_verify_after_serde_roundtrip() {
     let json = serde_json::to_string(&sig).unwrap();
     let deserialized: ContextualBLSAG = serde_json::from_str(&json).unwrap();
 
-    // Confirm the internal ring is now in Compressed state
+    // Internal ring is auto-decompressed by serde Deserialize
     match &deserialized.context {
         RingContext::Archival(r) => assert!(
-            !r.is_decompressed(),
-            "Internal ring should be Compressed after serde roundtrip"
+            r.is_decompressed(),
+            "Internal ring should be auto-decompressed after serde roundtrip"
         ),
         _ => panic!("Expected Archival context after deserialization"),
     }
@@ -244,12 +236,12 @@ fn contextual_blsag_compact_verify_after_serde_roundtrip() {
     let sig_json = serde_json::to_string(&sig).unwrap();
     let deserialized_sig: ContextualBLSAG = serde_json::from_str(&sig_json).unwrap();
 
-    // Serde roundtrip for the external ring — becomes Compressed
+    // Serde roundtrip for the external ring — auto-decompressed
     let ring_json = serde_json::to_string(&ring).unwrap();
     let deserialized_ring: Ring = serde_json::from_str(&ring_json).unwrap();
     assert!(
-        !deserialized_ring.is_decompressed(),
-        "External ring should be Compressed after serde roundtrip"
+        deserialized_ring.is_decompressed(),
+        "External ring should be auto-decompressed after serde roundtrip"
     );
 
     // verify() should auto-decompress the external ring and succeed
