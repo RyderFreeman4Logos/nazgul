@@ -210,7 +210,9 @@ impl serde::Serialize for Ring {
 impl<'de> serde::Deserialize<'de> for Ring {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let compressed = Vec::<CompressedRistretto>::deserialize(deserializer)?;
-        Ok(Ring::from_compressed(compressed))
+        Ring::from_compressed(compressed)
+            .decompress()
+            .map_err(|_| serde::de::Error::custom("failed to decompress ring point"))
     }
 }
 
