@@ -59,10 +59,16 @@ mod contextual;
 mod engine;
 mod precompute;
 mod sign;
+mod strategy;
+pub mod streaming;
 mod verify;
 
 pub use contextual::ContextualBLSAG;
 pub use precompute::SigningPrecomputation;
+pub use strategy::MemoryStrategy;
+pub use streaming::{
+    StepOutput, StreamingBlsagSigner, StreamingBlsagVerifier, StreamingError, VerifyStepOutput,
+};
 
 use crate::prelude::*;
 use crate::ring::Ring;
@@ -129,7 +135,7 @@ impl BLSAG {
         }
     }
 
-    /// Generates a fake BLSAG signature for testing purposes.
+    /// Generates a fake BLSAG signature using an externally provided RNG.
     ///
     /// The generated signature is structurally valid (contains valid points and scalars)
     /// but is cryptographically invalid. Use this to test robustness against DOS attacks
@@ -138,19 +144,27 @@ impl BLSAG {
     /// # Performance
     /// This method performs `n + 1` RNG calls (where `n` is ring size) and 1 RistrettoPoint generation.
     /// It avoids expensive multiscalar multiplications required for real signing.
-    pub fn generate_fake<CSPRNG: CryptoRng + RngCore + Default>(ring: &Ring) -> Self {
-        let mut csprng = CSPRNG::default();
+    pub fn generate_fake_with_rng<R: CryptoRng + RngCore>(ring: &Ring, rng: &mut R) -> Self {
         let n = ring.len();
 
-        let challenge = Scalar::random(&mut csprng);
-        let responses: ResponseVec = (0..n).map(|_| Scalar::random(&mut csprng)).collect();
-        let key_image = RistrettoPoint::random(&mut csprng);
+        let challenge = Scalar::random(rng);
+        let responses: ResponseVec = (0..n).map(|_| Scalar::random(rng)).collect();
+        let key_image = RistrettoPoint::random(rng);
 
         BLSAG {
             challenge,
             responses,
             key_image,
         }
+    }
+
+    /// Generates a fake BLSAG signature for testing purposes.
+    ///
+    /// Convenience wrapper that creates a CSPRNG via `Default` and delegates to
+    /// [`generate_fake_with_rng`](Self::generate_fake_with_rng).
+    pub fn generate_fake<CSPRNG: CryptoRng + RngCore + Default>(ring: &Ring) -> Self {
+        let mut csprng = CSPRNG::default();
+        Self::generate_fake_with_rng(ring, &mut csprng)
     }
 }
 

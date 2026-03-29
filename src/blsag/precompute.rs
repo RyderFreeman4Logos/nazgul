@@ -14,7 +14,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 ///
 /// Captures all nonce-derived values (`alpha`, `alpha*G`, `alpha*H_p`) and random
 /// responses so that the actual signing step only needs the message. The struct is
-/// move-consumed by [`BLSAG::sign_precomputed`] and the secret nonce `alpha` is
+/// move-consumed by [`sign_precomputed`](super::BLSAG::sign_precomputed) and the secret nonce `alpha` is
 /// zeroized on drop.
 ///
 /// # Security properties
