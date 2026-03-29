@@ -36,8 +36,6 @@ pub enum StreamingError {
     OutOfOrder { expected: usize, got: usize },
     /// A compressed point failed Ristretto decompression (not on curve).
     InvalidPoint,
-    /// The same index was submitted twice in the current phase.
-    DuplicateIndex { index: usize },
     /// The ring hash computed during validation does not match the expected value.
     RingHashMismatch,
     /// Attempted to start signing before validation completed.
@@ -58,9 +56,6 @@ impl core::fmt::Display for StreamingError {
                 )
             }
             StreamingError::InvalidPoint => write!(f, "compressed point failed decompression"),
-            StreamingError::DuplicateIndex { index } => {
-                write!(f, "duplicate member at index {index}")
-            }
             StreamingError::RingHashMismatch => write!(f, "ring hash mismatch after validation"),
             StreamingError::ValidationNotComplete => {
                 write!(f, "signing requires completed validation")
