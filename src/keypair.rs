@@ -4,6 +4,7 @@ use anyhow::Result as AResult;
 use core::fmt;
 use digest::{generic_array::typenum::U64, Digest};
 use rand_core::{CryptoRng, RngCore};
+use zeroize::Zeroize;
 
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
@@ -69,8 +70,21 @@ impl KeyPair {
     }
 
     /// Consumes the `KeyPair` and returns the secret and public keys.
-    pub fn into_keys(self) -> (Option<Scalar>, RistrettoPoint) {
-        (self.secret, self.public)
+    ///
+    /// The secret scalar is moved out before Drop runs, so it will NOT be
+    /// zeroized by this type — the caller assumes ownership and responsibility.
+    pub fn into_keys(mut self) -> (Option<Scalar>, RistrettoPoint) {
+        let secret = self.secret.take();
+        let public = self.public;
+        (secret, public)
+    }
+}
+
+impl Drop for KeyPair {
+    fn drop(&mut self) {
+        if let Some(ref mut scalar) = self.secret {
+            scalar.zeroize();
+        }
     }
 }
 
