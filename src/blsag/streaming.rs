@@ -1,0 +1,800 @@
+//! Allocator-free streaming BLSAG signer for memory-constrained devices.
+//!
+//! [`StreamingBlsagSigner`] implements a two-phase protocol that receives ring members
+//! one at a time, producing signature components incrementally with O(1) memory.
+//!
+//! # Two-phase protocol
+//!
+//! **Phase 1 — Validation**: Ring members are fed in canonical order (0..N-1) to
+//! compute a running ring hash. After all members are submitted, the hash is compared
+//! against the expected value provided at initialization.
+//!
+//! **Phase 2 — Signing**: Ring members are fed in signing order (pi+1, pi+2, ..., N-1,
+//! 0, 1, ..., pi). Each non-signer member produces a response scalar `s_i` immediately.
+//! The final member (the signer at index pi) produces the closing challenge `c_0`, the
+//! key image, and the signer's response scalar.
+//!
+//! # Algorithm compatibility
+//!
+//! The output is mathematically identical to [`BLSAG::sign_with_rng`](super::BLSAG::sign_with_rng)
+//! and verifies with the standard `BLSAG` verification path.
+
+use crate::ring::RingHash;
+use curve25519_dalek::constants;
+use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
+use curve25519_dalek::scalar::Scalar;
+use digest::generic_array::typenum::U64;
+use digest::Digest;
+use rand_core::{CryptoRng, RngCore};
+use sha3::Sha3_512;
+use zeroize::Zeroize;
+
+/// Errors specific to the streaming signing protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamingError {
+    /// A member was submitted at an unexpected index.
+    OutOfOrder { expected: usize, got: usize },
+    /// A compressed point failed Ristretto decompression (not on curve).
+    InvalidPoint,
+    /// The same index was submitted twice in the current phase.
+    DuplicateIndex { index: usize },
+    /// The ring hash computed during validation does not match the expected value.
+    RingHashMismatch,
+    /// Attempted to start signing before validation completed.
+    ValidationNotComplete,
+    /// The state machine is in an unexpected state for the requested operation.
+    InvalidState,
+    /// Ring length must be at least 1.
+    EmptyRing,
+}
+
+impl core::fmt::Display for StreamingError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            StreamingError::OutOfOrder { expected, got } => {
+                write!(
+                    f,
+                    "out-of-order member: expected index {expected}, got {got}"
+                )
+            }
+            StreamingError::InvalidPoint => write!(f, "compressed point failed decompression"),
+            StreamingError::DuplicateIndex { index } => {
+                write!(f, "duplicate member at index {index}")
+            }
+            StreamingError::RingHashMismatch => write!(f, "ring hash mismatch after validation"),
+            StreamingError::ValidationNotComplete => {
+                write!(f, "signing requires completed validation")
+            }
+            StreamingError::InvalidState => write!(f, "operation not valid in current state"),
+            StreamingError::EmptyRing => write!(f, "ring length must be at least 1"),
+        }
+    }
+}
+
+/// Output produced by each step of the streaming signing protocol.
+#[derive(Debug, Clone)]
+pub enum StepOutput {
+    /// Acknowledgement that a validation-phase member was accepted.
+    Ack,
+    /// A response scalar produced for a non-signer ring member during signing.
+    ScalarResponse {
+        /// The ring index this response belongs to.
+        index: usize,
+        /// The random response scalar `s_i`.
+        s_i: Scalar,
+    },
+    /// The final output completing the ring signature.
+    Complete {
+        /// The initial challenge scalar `c_0`.
+        c_0: Scalar,
+        /// The signer's key image `I`.
+        key_image: RistrettoPoint,
+        /// The signer's response scalar `s_{pi}`.
+        signer_s: Scalar,
+        /// The signer's ring index.
+        signer_index: usize,
+    },
+}
+
+/// Secret scalar wrapper with zeroize on drop (matches existing pattern in sign.rs).
+struct SecretScalar(Scalar);
+
+impl Drop for SecretScalar {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// State machine internals
+// ---------------------------------------------------------------------------
+
+/// Validation-phase state: accumulates ring hash from members in order 0..N-1.
+struct Validating {
+    ring_len: usize,
+    expected_ring_hash: RingHash,
+    hasher: Sha3_512,
+    members_seen: usize,
+}
+
+/// State after validation is complete and ring hash verified.
+struct Validated {
+    ring_len: usize,
+    // ring_hash stored for future extensions (e.g., embedding in signature context).
+    _ring_hash: RingHash,
+}
+
+/// State after key image and initial nonce commitment are computed.
+/// Ready to receive ring members in signing order.
+struct Signing<H: Digest<OutputSize = U64> + Clone + Default> {
+    ring_len: usize,
+    signer_index: usize,
+    message_hash: H,
+    key_image: RistrettoPoint,
+    /// Current challenge being chained through the ring.
+    c_current: Scalar,
+    /// The challenge `c_0` is captured when index N-1 is processed.
+    c_0: Scalar,
+    /// Alpha nonce (secret, zeroized on drop).
+    alpha: SecretScalar,
+    /// Secret key (zeroized on drop).
+    secret_key: SecretScalar,
+    /// How many signing members have been submitted.
+    sign_step: usize,
+    /// Whether c_0 has been captured yet.
+    c_0_captured: bool,
+}
+
+enum State<H: Digest<OutputSize = U64> + Clone + Default> {
+    Idle,
+    Validating(Validating),
+    Validated(Validated),
+    Signing(Signing<H>),
+    Done,
+    /// Poisoned state after an error or move.
+    Poisoned,
+}
+
+/// Allocator-free streaming BLSAG signer.
+///
+/// Generic over `H` (hash function, e.g. `Sha3_512`) and `R` (RNG source).
+/// The RNG is used to generate the nonce `alpha` and the random response
+/// scalars for non-signer members.
+pub struct StreamingBlsagSigner<
+    H: Digest<OutputSize = U64> + Clone + Default,
+    R: CryptoRng + RngCore,
+> {
+    state: State<H>,
+    rng: R,
+}
+
+impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
+    StreamingBlsagSigner<H, R>
+{
+    /// Creates a new streaming signer in the Idle state.
+    pub fn new(rng: R) -> Self {
+        Self {
+            state: State::Idle,
+            rng,
+        }
+    }
+
+    /// Phase 1, Step 1: Initialize the validation pass.
+    ///
+    /// `ring_len` is the total number of ring members. `expected_ring_hash` is the
+    /// canonical ring hash that the running computation must match after all members
+    /// are submitted.
+    pub fn init_validation(
+        &mut self,
+        ring_len: usize,
+        expected_ring_hash: RingHash,
+    ) -> Result<(), StreamingError> {
+        if !matches!(self.state, State::Idle) {
+            return Err(StreamingError::InvalidState);
+        }
+        if ring_len == 0 {
+            return Err(StreamingError::EmptyRing);
+        }
+
+        self.state = State::Validating(Validating {
+            ring_len,
+            expected_ring_hash,
+            hasher: Sha3_512::default(),
+            members_seen: 0,
+        });
+
+        Ok(())
+    }
+
+    /// Phase 1, Step 2: Submit a ring member for validation.
+    ///
+    /// Members must be submitted in canonical sorted order (index 0, 1, ..., N-1).
+    /// Each compressed point is validated by attempting Ristretto decompression.
+    pub fn validate_member(
+        &mut self,
+        index: usize,
+        compressed: &CompressedRistretto,
+    ) -> Result<StepOutput, StreamingError> {
+        let validating = match &mut self.state {
+            State::Validating(v) => v,
+            _ => return Err(StreamingError::InvalidState),
+        };
+
+        // Enforce sequential order.
+        if index != validating.members_seen {
+            return Err(StreamingError::OutOfOrder {
+                expected: validating.members_seen,
+                got: index,
+            });
+        }
+
+        // Duplicate check: if index < members_seen, it's a duplicate.
+        // (Covered by the order check above since index must equal members_seen.)
+
+        // Validate point is on the Ristretto curve.
+        if compressed.decompress().is_none() {
+            return Err(StreamingError::InvalidPoint);
+        }
+
+        // Feed compressed bytes into the running ring hash (SHA3-512, same as Ring::canonical_hash).
+        validating.hasher.update(compressed.as_bytes());
+        validating.members_seen += 1;
+
+        // Check if validation is complete.
+        if validating.members_seen == validating.ring_len {
+            // Finalize the ring hash.
+            // We need to take ownership of the validating state to finalize the hasher.
+            let old_state = core::mem::replace(&mut self.state, State::Poisoned);
+            let validating = match old_state {
+                State::Validating(v) => v,
+                _ => unreachable!(),
+            };
+
+            let output = validating.hasher.finalize();
+            let mut hash_bytes = [0u8; 32];
+            hash_bytes.copy_from_slice(&output[..32]);
+            let computed_hash = RingHash(hash_bytes);
+
+            if computed_hash != validating.expected_ring_hash {
+                self.state = State::Idle;
+                return Err(StreamingError::RingHashMismatch);
+            }
+
+            self.state = State::Validated(Validated {
+                ring_len: validating.ring_len,
+                _ring_hash: computed_hash,
+            });
+        }
+
+        Ok(StepOutput::Ack)
+    }
+
+    /// Phase 2, Step 1: Initialize the signing pass.
+    ///
+    /// `signer_index` is the position of the signer's public key in the sorted ring (0-based).
+    /// `secret_key` is the signer's private scalar.
+    /// `signer_pubkey_compressed` is the signer's public key (must match `secret_key * G`).
+    /// `message` is the message being signed.
+    ///
+    /// This computes the key image `I`, the nonce `alpha`, and the initial challenge
+    /// `c_{pi+1}` from the nonce commitments.
+    pub fn init_signing(
+        &mut self,
+        signer_index: usize,
+        secret_key: Scalar,
+        signer_pubkey_compressed: &CompressedRistretto,
+        message: &[u8],
+    ) -> Result<(), StreamingError> {
+        let validated = match &self.state {
+            State::Validated(v) => v,
+            State::Idle | State::Validating(_) => {
+                return Err(StreamingError::ValidationNotComplete)
+            }
+            _ => return Err(StreamingError::InvalidState),
+        };
+
+        if signer_index >= validated.ring_len {
+            return Err(StreamingError::OutOfOrder {
+                expected: validated.ring_len.saturating_sub(1),
+                got: signer_index,
+            });
+        }
+
+        let ring_len = validated.ring_len;
+
+        // Decompress the signer's public key for Hp computation.
+        let signer_pubkey = signer_pubkey_compressed
+            .decompress()
+            .ok_or(StreamingError::InvalidPoint)?;
+
+        let k = SecretScalar(secret_key);
+
+        // Key image: I = k * Hp(P_pi)
+        let hp_signer = RistrettoPoint::from_hash(
+            H::default()
+                .chain_update(b"nazgul-H_p-v3")
+                .chain_update(signer_pubkey.compress().as_bytes()),
+        );
+        let key_image = k.0 * hp_signer;
+
+        // Generate nonce alpha.
+        let alpha = SecretScalar(Scalar::random(&mut self.rng));
+
+        // Compute nonce commitments: alpha*G and alpha*Hp(P_pi).
+        let alpha_g = alpha.0 * constants::RISTRETTO_BASEPOINT_POINT;
+        let alpha_hp = alpha.0 * hp_signer;
+
+        // Message hash prefix (shared by all challenge computations).
+        let mut message_hash = H::default();
+        message_hash.update(b"nazgul-chal-v3");
+        message_hash.update(message);
+
+        // Compute c_{pi+1} = H(message_hash || alpha*G || alpha*Hp(P_pi))
+        let mut h = message_hash.clone();
+        h.update(alpha_g.compress().as_bytes());
+        h.update(alpha_hp.compress().as_bytes());
+        let c_plus_1 = Scalar::from_hash(h);
+
+        // If signer is the last member (pi == N-1), then c_0 = c_{pi+1}.
+        let c_0 = if signer_index == ring_len - 1 {
+            c_plus_1
+        } else {
+            Scalar::ZERO
+        };
+
+        self.state = State::Signing(Signing {
+            ring_len,
+            signer_index,
+            message_hash,
+            key_image,
+            c_current: c_plus_1,
+            c_0,
+            alpha,
+            secret_key: k,
+            sign_step: 0,
+            c_0_captured: signer_index == ring_len - 1,
+        });
+
+        Ok(())
+    }
+
+    /// Phase 2, Step 2: Submit a ring member for signing.
+    ///
+    /// Members must be submitted in signing order: starting from index `(pi+1) % N`,
+    /// wrapping around, and ending at index `pi` (the signer).
+    ///
+    /// For non-signer members, returns `StepOutput::ScalarResponse` with the generated `s_i`.
+    /// For the final member (the signer), returns `StepOutput::Complete`.
+    pub fn sign_member(
+        &mut self,
+        index: usize,
+        compressed: &CompressedRistretto,
+    ) -> Result<StepOutput, StreamingError> {
+        // We need mutable access to the signing state.
+        let signing = match &mut self.state {
+            State::Signing(s) => s,
+            _ => return Err(StreamingError::InvalidState),
+        };
+
+        let ring_len = signing.ring_len;
+        let signer_index = signing.signer_index;
+        let total_steps = ring_len; // N total members to process (N-1 non-signer + 1 signer)
+
+        // Expected index in the signing order: (pi+1+step) % N
+        let expected_index = (signer_index + 1 + signing.sign_step) % ring_len;
+        if index != expected_index {
+            return Err(StreamingError::OutOfOrder {
+                expected: expected_index,
+                got: index,
+            });
+        }
+
+        // Validate the point.
+        let point = compressed
+            .decompress()
+            .ok_or(StreamingError::InvalidPoint)?;
+
+        let is_signer_step = signing.sign_step == total_steps - 1;
+
+        if is_signer_step {
+            // This is the signer's own slot (index == pi).
+            // Compute s_pi = alpha - c_current * k.
+            let s_pi = signing.alpha.0 - (signing.c_current * signing.secret_key.0);
+
+            let c_0 = signing.c_0;
+            let key_image = signing.key_image;
+
+            // Transition to Done.
+            self.state = State::Done;
+
+            Ok(StepOutput::Complete {
+                c_0,
+                key_image,
+                signer_s: s_pi,
+                signer_index,
+            })
+        } else {
+            // Non-signer member: generate random s_i, compute next challenge.
+            let s_i = Scalar::random(&mut self.rng);
+
+            // Compute the next challenge inline (same math as engine::hash_ring_member_components).
+            // L = s_i * G + c_current * P_i
+            let l_point = RistrettoPoint::vartime_double_scalar_mul_basepoint(
+                &signing.c_current,
+                &point,
+                &s_i,
+            );
+
+            // Hp(P_i) — hash-to-point for this member.
+            let hp_i = RistrettoPoint::from_hash(
+                H::default()
+                    .chain_update(b"nazgul-H_p-v3")
+                    .chain_update(point.compress().as_bytes()),
+            );
+
+            // R = s_i * Hp(P_i) + c_current * I
+            let r_point = s_i * hp_i + signing.c_current * signing.key_image;
+
+            let mut h = signing.message_hash.clone();
+            h.update(l_point.compress().as_bytes());
+            h.update(r_point.compress().as_bytes());
+            let next_challenge = Scalar::from_hash(h);
+
+            signing.c_current = next_challenge;
+            signing.sign_step += 1;
+
+            // Capture c_0 when we process index N-1.
+            if index == ring_len - 1 {
+                signing.c_0 = signing.c_current;
+                signing.c_0_captured = true;
+            }
+
+            Ok(StepOutput::ScalarResponse { index, s_i })
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "std")]
+mod tests {
+    extern crate std;
+    use std::vec;
+    use std::vec::Vec;
+
+    use super::*;
+    use crate::blsag::BLSAG;
+    use crate::ring::Ring;
+    use crate::traits::VerifyRef;
+    use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
+    use rand_chacha::ChaCha20Rng;
+    use rand_core::SeedableRng;
+    use sha3::Sha3_512;
+
+    /// Helper: generate a deterministic keypair from a seed byte.
+    fn keypair_from_seed(seed: u8) -> (Scalar, RistrettoPoint) {
+        let mut rng = ChaCha20Rng::from_seed([seed; 32]);
+        let sk = Scalar::random(&mut rng);
+        let pk = sk * RISTRETTO_BASEPOINT_POINT;
+        (sk, pk)
+    }
+
+    /// Run the streaming signer and verify the result against standard BLSAG verification.
+    fn streaming_sign_and_verify(ring_size: usize) {
+        // Generate keypairs.
+        let keypairs: Vec<(Scalar, RistrettoPoint)> = (0..ring_size)
+            .map(|i| keypair_from_seed(i as u8 + 1))
+            .collect();
+
+        let signer_idx_in_keypairs = 0; // First keypair is the signer.
+        let (secret_key, _signer_pk) = keypairs[signer_idx_in_keypairs];
+
+        // Build the ring (sorted).
+        let public_keys: Vec<RistrettoPoint> = keypairs.iter().map(|(_, pk)| *pk).collect();
+        let ring = Ring::new(public_keys);
+        let ring_hash = ring.canonical_hash();
+
+        // Find the signer's index in the sorted ring.
+        let signer_pk: RistrettoPoint = secret_key * RISTRETTO_BASEPOINT_POINT;
+        let signer_index = ring
+            .members()
+            .iter()
+            .position(|p| p.compress() == signer_pk.compress())
+            .expect("signer must be in ring");
+
+        let message = b"streaming test message";
+
+        // --- Streaming signer ---
+        let streaming_rng = ChaCha20Rng::from_seed([0xBB; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(streaming_rng);
+
+        // Phase 1: Validation.
+        signer
+            .init_validation(ring.len(), ring_hash)
+            .expect("init_validation");
+
+        let compressed_members = ring.compressed_members();
+        for i in 0..ring.len() {
+            let result = signer
+                .validate_member(i, &compressed_members[i])
+                .expect("validate_member");
+            assert!(matches!(result, StepOutput::Ack));
+        }
+
+        // Phase 2: Signing.
+        signer
+            .init_signing(signer_index, secret_key, &signer_pk.compress(), message)
+            .expect("init_signing");
+
+        let n = ring.len();
+        let mut responses = vec![Scalar::ZERO; n];
+        let mut final_c0 = Scalar::ZERO;
+        let mut final_key_image = RISTRETTO_BASEPOINT_POINT; // placeholder
+        let ring_members = ring.members();
+
+        for step in 0..n {
+            let idx = (signer_index + 1 + step) % n;
+            let result = signer
+                .sign_member(idx, &ring_members[idx].compress())
+                .expect("sign_member");
+
+            match result {
+                StepOutput::ScalarResponse { index, s_i } => {
+                    responses[index] = s_i;
+                }
+                StepOutput::Complete {
+                    c_0,
+                    key_image,
+                    signer_s,
+                    signer_index: si,
+                } => {
+                    final_c0 = c_0;
+                    final_key_image = key_image;
+                    responses[si] = signer_s;
+                }
+                StepOutput::Ack => panic!("unexpected Ack during signing"),
+            }
+        }
+
+        // Construct the BLSAG signature from streaming outputs.
+        let signature = BLSAG::from_parts(final_c0, responses, final_key_image);
+
+        // Verify using standard verification.
+        let valid = BLSAG::verify::<Sha3_512>(&signature, &ring, None, message);
+        assert!(
+            valid,
+            "streaming signature must verify with standard BLSAG verifier"
+        );
+    }
+
+    #[test]
+    fn test_streaming_ring_size_1() {
+        streaming_sign_and_verify(1);
+    }
+
+    #[test]
+    fn test_streaming_ring_size_2() {
+        streaming_sign_and_verify(2);
+    }
+
+    #[test]
+    fn test_streaming_ring_size_3() {
+        streaming_sign_and_verify(3);
+    }
+
+    #[test]
+    fn test_streaming_ring_size_10() {
+        streaming_sign_and_verify(10);
+    }
+
+    #[test]
+    fn test_error_out_of_order_validation() {
+        let ring_rng = ChaCha20Rng::from_seed([0xCC; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(ring_rng);
+
+        let keypairs: Vec<(Scalar, RistrettoPoint)> =
+            (0..3).map(|i| keypair_from_seed(i + 10)).collect();
+        let public_keys: Vec<RistrettoPoint> = keypairs.iter().map(|(_, pk)| *pk).collect();
+        let ring = Ring::new(public_keys);
+        let ring_hash = ring.canonical_hash();
+
+        signer.init_validation(3, ring_hash).unwrap();
+
+        let compressed = ring.compressed_members();
+        // Submit index 0 correctly.
+        signer.validate_member(0, &compressed[0]).unwrap();
+        // Skip index 1, submit index 2 — should fail.
+        let err = signer.validate_member(2, &compressed[2]).unwrap_err();
+        assert_eq!(
+            err,
+            StreamingError::OutOfOrder {
+                expected: 1,
+                got: 2
+            }
+        );
+    }
+
+    #[test]
+    fn test_error_invalid_compressed_point() {
+        let rng = ChaCha20Rng::from_seed([0xDD; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
+
+        signer.init_validation(1, RingHash([0u8; 32])).unwrap();
+
+        // All 0xFF bytes is not a valid Ristretto point.
+        let invalid = CompressedRistretto::from_slice(&[0xFF; 32]).unwrap();
+        let err = signer.validate_member(0, &invalid).unwrap_err();
+        assert_eq!(err, StreamingError::InvalidPoint);
+    }
+
+    #[test]
+    fn test_error_duplicate_index_validation() {
+        let rng = ChaCha20Rng::from_seed([0xEE; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
+
+        let (_, pk) = keypair_from_seed(42);
+        let ring = Ring::new(vec![pk]);
+        let ring_hash = ring.canonical_hash();
+
+        signer.init_validation(1, ring_hash).unwrap();
+
+        let compressed = ring.compressed_members();
+        signer.validate_member(0, &compressed[0]).unwrap();
+
+        // Submitting index 0 again — but state already transitioned to Validated,
+        // so this is an InvalidState.
+        let err = signer.validate_member(0, &compressed[0]).unwrap_err();
+        assert_eq!(err, StreamingError::InvalidState);
+    }
+
+    #[test]
+    fn test_error_ring_hash_mismatch() {
+        let rng = ChaCha20Rng::from_seed([0xFF; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
+
+        let (_, pk) = keypair_from_seed(50);
+        let ring = Ring::new(vec![pk]);
+
+        // Use a wrong expected hash.
+        let wrong_hash = RingHash([0x42; 32]);
+        signer.init_validation(1, wrong_hash).unwrap();
+
+        let compressed = ring.compressed_members();
+        let err = signer.validate_member(0, &compressed[0]).unwrap_err();
+        assert_eq!(err, StreamingError::RingHashMismatch);
+    }
+
+    #[test]
+    fn test_error_signing_before_validation() {
+        let rng = ChaCha20Rng::from_seed([0x11; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
+
+        let (sk, pk) = keypair_from_seed(60);
+        let err = signer
+            .init_signing(0, sk, &pk.compress(), b"msg")
+            .unwrap_err();
+        assert_eq!(err, StreamingError::ValidationNotComplete);
+    }
+
+    #[test]
+    fn test_error_out_of_order_signing() {
+        let keypairs: Vec<(Scalar, RistrettoPoint)> =
+            (0..3).map(|i| keypair_from_seed(i + 70)).collect();
+        let public_keys: Vec<RistrettoPoint> = keypairs.iter().map(|(_, pk)| *pk).collect();
+        let ring = Ring::new(public_keys);
+        let ring_hash = ring.canonical_hash();
+        let compressed = ring.compressed_members();
+        let members = ring.members();
+
+        let (secret_key, _) = keypairs[0];
+        let signer_pk: RistrettoPoint = secret_key * RISTRETTO_BASEPOINT_POINT;
+        let signer_index = members
+            .iter()
+            .position(|p| p.compress() == signer_pk.compress())
+            .unwrap();
+
+        let rng = ChaCha20Rng::from_seed([0x22; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
+
+        signer.init_validation(3, ring_hash).unwrap();
+        for i in 0..3 {
+            signer.validate_member(i, &compressed[i]).unwrap();
+        }
+
+        signer
+            .init_signing(signer_index, secret_key, &signer_pk.compress(), b"test")
+            .unwrap();
+
+        // First expected index is (signer_index + 1) % 3.
+        let expected_first = (signer_index + 1) % 3;
+        // Submit a wrong index.
+        let wrong_index = (signer_index + 2) % 3;
+        if wrong_index != expected_first {
+            let err = signer
+                .sign_member(wrong_index, &members[wrong_index].compress())
+                .unwrap_err();
+            assert!(
+                matches!(err, StreamingError::OutOfOrder { .. }),
+                "expected OutOfOrder, got {:?}",
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn test_error_empty_ring() {
+        let rng = ChaCha20Rng::from_seed([0x33; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
+
+        let err = signer.init_validation(0, RingHash([0u8; 32])).unwrap_err();
+        assert_eq!(err, StreamingError::EmptyRing);
+    }
+
+    #[test]
+    fn test_signing_invalid_point_during_signing() {
+        // Set up a valid ring and complete validation, then pass an invalid point during signing.
+        let (sk, pk) = keypair_from_seed(80);
+        let ring = Ring::new(vec![pk, keypair_from_seed(81).1]);
+        let ring_hash = ring.canonical_hash();
+        let compressed = ring.compressed_members();
+        let members = ring.members();
+
+        let signer_pk = sk * RISTRETTO_BASEPOINT_POINT;
+        let signer_index = members
+            .iter()
+            .position(|p| p.compress() == signer_pk.compress())
+            .unwrap();
+
+        let rng = ChaCha20Rng::from_seed([0x44; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
+
+        signer.init_validation(2, ring_hash).unwrap();
+        for i in 0..2 {
+            signer.validate_member(i, &compressed[i]).unwrap();
+        }
+
+        signer
+            .init_signing(signer_index, sk, &signer_pk.compress(), b"test")
+            .unwrap();
+
+        let first_sign_idx = (signer_index + 1) % 2;
+        let invalid = CompressedRistretto::from_slice(&[0xFF; 32]).unwrap();
+        let err = signer.sign_member(first_sign_idx, &invalid).unwrap_err();
+        assert_eq!(err, StreamingError::InvalidPoint);
+    }
+
+    #[test]
+    fn test_cannot_call_sign_member_after_done() {
+        // Ring size 1: signing immediately completes.
+        let (sk, pk) = keypair_from_seed(90);
+        let ring = Ring::new(vec![pk]);
+        let ring_hash = ring.canonical_hash();
+        let compressed = ring.compressed_members();
+        let members = ring.members();
+
+        let signer_pk = sk * RISTRETTO_BASEPOINT_POINT;
+        let signer_index = members
+            .iter()
+            .position(|p| p.compress() == signer_pk.compress())
+            .unwrap();
+
+        let rng = ChaCha20Rng::from_seed([0x55; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
+
+        signer.init_validation(1, ring_hash).unwrap();
+        signer.validate_member(0, &compressed[0]).unwrap();
+
+        signer
+            .init_signing(signer_index, sk, &signer_pk.compress(), b"test")
+            .unwrap();
+
+        // The only member is the signer.
+        let result = signer
+            .sign_member(signer_index, &members[signer_index].compress())
+            .unwrap();
+        assert!(matches!(result, StepOutput::Complete { .. }));
+
+        // Now trying to sign again should fail.
+        let err = signer.sign_member(0, &members[0].compress()).unwrap_err();
+        assert_eq!(err, StreamingError::InvalidState);
+    }
+}
