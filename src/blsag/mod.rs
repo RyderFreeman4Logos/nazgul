@@ -59,12 +59,16 @@ mod contextual;
 mod engine;
 mod precompute;
 mod sign;
+mod strategy;
 pub mod streaming;
 mod verify;
 
 pub use contextual::ContextualBLSAG;
 pub use precompute::SigningPrecomputation;
-pub use streaming::{StepOutput, StreamingBlsagSigner, StreamingError};
+pub use strategy::MemoryStrategy;
+pub use streaming::{
+    StepOutput, StreamingBlsagSigner, StreamingBlsagVerifier, StreamingError, VerifyStepOutput,
+};
 
 use crate::prelude::*;
 use crate::ring::Ring;

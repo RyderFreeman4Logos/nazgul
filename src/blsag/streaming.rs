@@ -454,6 +454,180 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
     }
 }
 
+// ---------------------------------------------------------------------------
+// Streaming BLSAG Verifier
+// ---------------------------------------------------------------------------
+
+/// Output produced by each step of the streaming verification protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyStepOutput {
+    /// Acknowledgement that an intermediate ring member was processed.
+    Ack,
+    /// Final result after the last ring member has been processed.
+    Complete {
+        /// Whether the reconstructed challenge matches `c_0`.
+        valid: bool,
+    },
+}
+
+/// State tag for the streaming verifier (no data, avoids large-enum-variant).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifierPhase {
+    Idle,
+    Verifying,
+    Done,
+}
+
+/// Allocator-free streaming BLSAG verifier.
+///
+/// Receives ring members one at a time alongside their response scalars,
+/// recomputing the challenge chain incrementally with O(1) memory. After
+/// the final member, reports whether the signature is valid.
+///
+/// # Algorithm
+///
+/// Given signature `(c_0, s_0..s_{n-1}, key_image I)`, message `m`,
+/// ring `{P_0..P_{n-1}}`:
+///
+/// ```text
+/// For i = 0 to n-1:
+///   L_i = s_i * G + c_i * P_i
+///   R_i = s_i * Hp(P_i) + c_i * I
+///   c_{i+1} = H(m || L_i || R_i)
+/// Verify: c_n == c_0
+/// ```
+pub struct StreamingBlsagVerifier<H: Digest<OutputSize = U64> + Clone + Default> {
+    phase: VerifierPhase,
+    ring_len: usize,
+    /// The original `c_0` to check against after traversing the full ring.
+    c_0: Scalar,
+    /// The current challenge being chained through the ring.
+    c_current: Scalar,
+    /// Key image point (decompressed once at init).
+    key_image: RistrettoPoint,
+    /// Precomputed message hash prefix: `H("nazgul-chal-v3" || message)`.
+    message_hash: H,
+    /// Number of members processed so far.
+    members_verified: usize,
+}
+
+impl<H: Digest<OutputSize = U64> + Clone + Default> StreamingBlsagVerifier<H> {
+    /// Creates a new streaming verifier in the Idle state.
+    pub fn new() -> Self {
+        Self {
+            phase: VerifierPhase::Idle,
+            ring_len: 0,
+            c_0: Scalar::ZERO,
+            c_current: Scalar::ZERO,
+            key_image: constants::RISTRETTO_BASEPOINT_POINT,
+            message_hash: H::default(),
+            members_verified: 0,
+        }
+    }
+
+    /// Initialize the verification pass.
+    ///
+    /// - `c_0`: the initial challenge from the signature.
+    /// - `key_image`: the compressed key image from the signature.
+    /// - `message`: the signed message.
+    /// - `ring_len`: number of ring members.
+    ///
+    /// Returns `Err` if `key_image` fails decompression or `ring_len` is zero.
+    pub fn init(
+        &mut self,
+        c_0: Scalar,
+        key_image: &CompressedRistretto,
+        message: &[u8],
+        ring_len: usize,
+    ) -> Result<(), StreamingError> {
+        if self.phase != VerifierPhase::Idle {
+            return Err(StreamingError::InvalidState);
+        }
+        if ring_len == 0 {
+            return Err(StreamingError::EmptyRing);
+        }
+        let ki = key_image.decompress().ok_or(StreamingError::InvalidPoint)?;
+
+        self.ring_len = ring_len;
+        self.c_0 = c_0;
+        self.c_current = c_0;
+        self.key_image = ki;
+        self.message_hash = H::default()
+            .chain_update(b"nazgul-chal-v3")
+            .chain_update(message);
+        self.members_verified = 0;
+        self.phase = VerifierPhase::Verifying;
+
+        Ok(())
+    }
+
+    /// Submit a ring member with its response scalar for verification.
+    ///
+    /// Members must be submitted in order: index 0, 1, ..., N-1.
+    ///
+    /// For intermediate members (i < N-1), returns `VerifyStepOutput::Ack`.
+    /// For the final member (i == N-1), returns `VerifyStepOutput::Complete { valid }`.
+    pub fn verify_member(
+        &mut self,
+        index: usize,
+        member: &CompressedRistretto,
+        s_i: Scalar,
+    ) -> Result<VerifyStepOutput, StreamingError> {
+        if self.phase != VerifierPhase::Verifying {
+            return Err(StreamingError::InvalidState);
+        }
+
+        // Enforce sequential order.
+        if index != self.members_verified {
+            return Err(StreamingError::OutOfOrder {
+                expected: self.members_verified,
+                got: index,
+            });
+        }
+
+        // Decompress the ring member point.
+        let point = member.decompress().ok_or(StreamingError::InvalidPoint)?;
+
+        // L_i = s_i * G + c_i * P_i
+        let l_point =
+            RistrettoPoint::vartime_double_scalar_mul_basepoint(&self.c_current, &point, &s_i);
+
+        // Hp(P_i) = hash-to-point
+        let hp_i = RistrettoPoint::from_hash(
+            H::default()
+                .chain_update(b"nazgul-H_p-v3")
+                .chain_update(member.as_bytes()),
+        );
+
+        // R_i = s_i * Hp(P_i) + c_i * I
+        let r_point = s_i * hp_i + self.c_current * self.key_image;
+
+        // c_{i+1} = H(message_hash || L_i || R_i)
+        let mut h = self.message_hash.clone();
+        h.update(l_point.compress().as_bytes());
+        h.update(r_point.compress().as_bytes());
+        let next_challenge = Scalar::from_hash(h);
+
+        self.c_current = next_challenge;
+        self.members_verified += 1;
+
+        // Check if this was the last member.
+        if self.members_verified == self.ring_len {
+            let valid = self.c_current == self.c_0;
+            self.phase = VerifierPhase::Done;
+            Ok(VerifyStepOutput::Complete { valid })
+        } else {
+            Ok(VerifyStepOutput::Ack)
+        }
+    }
+}
+
+impl<H: Digest<OutputSize = U64> + Clone + Default> Default for StreamingBlsagVerifier<H> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 #[cfg(feature = "std")]
 mod tests {
@@ -464,8 +638,9 @@ mod tests {
     use super::*;
     use crate::blsag::BLSAG;
     use crate::ring::Ring;
-    use crate::traits::VerifyRef;
+    use crate::traits::{SignRef, VerifyRef};
     use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
+    use rand::rngs::OsRng;
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng;
     use sha3::Sha3_512;
@@ -760,6 +935,337 @@ mod tests {
         let invalid = CompressedRistretto::from_slice(&[0xFF; 32]).unwrap();
         let err = signer.sign_member(first_sign_idx, &invalid).unwrap_err();
         assert_eq!(err, StreamingError::InvalidPoint);
+    }
+
+    // =======================================================================
+    // StreamingBlsagVerifier tests
+    // =======================================================================
+
+    /// Helper: sign with the streaming signer, then verify with the streaming verifier.
+    fn streaming_sign_then_streaming_verify(ring_size: usize) {
+        let keypairs: Vec<(Scalar, RistrettoPoint)> = (0..ring_size)
+            .map(|i| keypair_from_seed(i as u8 + 1))
+            .collect();
+
+        let signer_idx_in_keypairs = 0;
+        let (secret_key, _) = keypairs[signer_idx_in_keypairs];
+
+        let public_keys: Vec<RistrettoPoint> = keypairs.iter().map(|(_, pk)| *pk).collect();
+        let ring = Ring::new(public_keys);
+        let ring_hash = ring.canonical_hash();
+
+        let signer_pk = secret_key * RISTRETTO_BASEPOINT_POINT;
+        let signer_index = ring
+            .members()
+            .iter()
+            .position(|p| p.compress() == signer_pk.compress())
+            .expect("signer must be in ring");
+
+        let message = b"streaming verifier test message";
+
+        // --- Sign with streaming signer ---
+        let streaming_rng = ChaCha20Rng::from_seed([0xAA; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(streaming_rng);
+
+        signer
+            .init_validation(ring.len(), ring_hash)
+            .expect("init_validation");
+
+        let compressed_members = ring.compressed_members();
+        for i in 0..ring.len() {
+            signer
+                .validate_member(i, &compressed_members[i])
+                .expect("validate_member");
+        }
+
+        signer
+            .init_signing(signer_index, secret_key, &signer_pk.compress(), message)
+            .expect("init_signing");
+
+        let n = ring.len();
+        let mut responses = vec![Scalar::ZERO; n];
+        let mut final_c0 = Scalar::ZERO;
+        let mut final_key_image = RISTRETTO_BASEPOINT_POINT;
+        let ring_members = ring.members();
+
+        for step in 0..n {
+            let idx = (signer_index + 1 + step) % n;
+            let result = signer
+                .sign_member(idx, &ring_members[idx].compress())
+                .expect("sign_member");
+
+            match result {
+                StepOutput::ScalarResponse { index, s_i } => {
+                    responses[index] = s_i;
+                }
+                StepOutput::Complete {
+                    c_0,
+                    key_image,
+                    signer_s,
+                    signer_index: si,
+                } => {
+                    final_c0 = c_0;
+                    final_key_image = key_image;
+                    responses[si] = signer_s;
+                }
+                StepOutput::Ack => panic!("unexpected Ack during signing"),
+            }
+        }
+
+        // --- Verify with streaming verifier ---
+        let mut verifier = StreamingBlsagVerifier::<Sha3_512>::new();
+        verifier
+            .init(final_c0, &final_key_image.compress(), message, n)
+            .expect("init verifier");
+
+        for i in 0..n {
+            let result = verifier
+                .verify_member(i, &compressed_members[i], responses[i])
+                .expect("verify_member");
+
+            if i < n - 1 {
+                assert_eq!(result, VerifyStepOutput::Ack);
+            } else {
+                assert_eq!(
+                    result,
+                    VerifyStepOutput::Complete { valid: true },
+                    "streaming verifier must report valid for ring size {ring_size}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_streaming_verify_ring_size_1() {
+        streaming_sign_then_streaming_verify(1);
+    }
+
+    #[test]
+    fn test_streaming_verify_ring_size_10() {
+        streaming_sign_then_streaming_verify(10);
+    }
+
+    #[test]
+    fn test_streaming_verify_ring_size_100() {
+        streaming_sign_then_streaming_verify(100);
+    }
+
+    /// Verify that standard BLSAG signatures also pass the streaming verifier.
+    #[test]
+    fn test_streaming_verify_standard_signature() {
+        let keypairs: Vec<(Scalar, RistrettoPoint)> =
+            (0..5).map(|i| keypair_from_seed(i + 100)).collect();
+        let (secret_key, _) = keypairs[0];
+        let public_keys: Vec<RistrettoPoint> = keypairs.iter().map(|(_, pk)| *pk).collect();
+        let ring = Ring::new(public_keys);
+
+        let message = b"standard sig streaming verify";
+        let signature =
+            BLSAG::sign::<Sha3_512, OsRng>(secret_key, &ring, None, message).expect("sign");
+
+        let compressed_members = ring.compressed_members();
+        let n = ring.len();
+
+        let mut verifier = StreamingBlsagVerifier::<Sha3_512>::new();
+        verifier
+            .init(
+                *signature.challenge(),
+                &signature.key_image().compress(),
+                message,
+                n,
+            )
+            .expect("init");
+
+        for i in 0..n {
+            let result = verifier
+                .verify_member(i, &compressed_members[i], signature.responses()[i])
+                .expect("verify_member");
+
+            if i == n - 1 {
+                assert_eq!(result, VerifyStepOutput::Complete { valid: true });
+            }
+        }
+    }
+
+    #[test]
+    fn test_streaming_verify_wrong_message() {
+        let keypairs: Vec<(Scalar, RistrettoPoint)> =
+            (0..3).map(|i| keypair_from_seed(i + 110)).collect();
+        let (secret_key, _) = keypairs[0];
+        let public_keys: Vec<RistrettoPoint> = keypairs.iter().map(|(_, pk)| *pk).collect();
+        let ring = Ring::new(public_keys);
+
+        let message = b"correct message";
+        let wrong_message = b"wrong message";
+        let signature =
+            BLSAG::sign::<Sha3_512, OsRng>(secret_key, &ring, None, message).expect("sign");
+
+        let compressed_members = ring.compressed_members();
+        let n = ring.len();
+
+        let mut verifier = StreamingBlsagVerifier::<Sha3_512>::new();
+        verifier
+            .init(
+                *signature.challenge(),
+                &signature.key_image().compress(),
+                wrong_message,
+                n,
+            )
+            .expect("init");
+
+        let mut final_result = VerifyStepOutput::Ack;
+        for i in 0..n {
+            final_result = verifier
+                .verify_member(i, &compressed_members[i], signature.responses()[i])
+                .expect("verify_member");
+        }
+        assert_eq!(final_result, VerifyStepOutput::Complete { valid: false });
+    }
+
+    #[test]
+    fn test_streaming_verify_tampered_response() {
+        let keypairs: Vec<(Scalar, RistrettoPoint)> =
+            (0..4).map(|i| keypair_from_seed(i + 120)).collect();
+        let (secret_key, _) = keypairs[0];
+        let public_keys: Vec<RistrettoPoint> = keypairs.iter().map(|(_, pk)| *pk).collect();
+        let ring = Ring::new(public_keys);
+
+        let message = b"tamper test";
+        let signature =
+            BLSAG::sign::<Sha3_512, OsRng>(secret_key, &ring, None, message).expect("sign");
+
+        let compressed_members = ring.compressed_members();
+        let n = ring.len();
+
+        let mut verifier = StreamingBlsagVerifier::<Sha3_512>::new();
+        verifier
+            .init(
+                *signature.challenge(),
+                &signature.key_image().compress(),
+                message,
+                n,
+            )
+            .expect("init");
+
+        let mut final_result = VerifyStepOutput::Ack;
+        for i in 0..n {
+            // Tamper with response at index 1.
+            let s_i = if i == 1 {
+                signature.responses()[i] + Scalar::ONE
+            } else {
+                signature.responses()[i]
+            };
+            final_result = verifier
+                .verify_member(i, &compressed_members[i], s_i)
+                .expect("verify_member");
+        }
+        assert_eq!(final_result, VerifyStepOutput::Complete { valid: false });
+    }
+
+    #[test]
+    fn test_streaming_verify_invalid_point() {
+        let (sk, pk) = keypair_from_seed(130);
+        let ring = Ring::new(vec![pk, keypair_from_seed(131).1]);
+        let message = b"invalid point test";
+        let signature = BLSAG::sign::<Sha3_512, OsRng>(sk, &ring, None, message).expect("sign");
+
+        let mut verifier = StreamingBlsagVerifier::<Sha3_512>::new();
+        verifier
+            .init(
+                *signature.challenge(),
+                &signature.key_image().compress(),
+                message,
+                ring.len(),
+            )
+            .expect("init");
+
+        let invalid = CompressedRistretto::from_slice(&[0xFF; 32]).unwrap();
+        let err = verifier
+            .verify_member(0, &invalid, signature.responses()[0])
+            .unwrap_err();
+        assert_eq!(err, StreamingError::InvalidPoint);
+    }
+
+    #[test]
+    fn test_streaming_verify_out_of_order() {
+        let (sk, pk) = keypair_from_seed(140);
+        let ring = Ring::new(vec![pk, keypair_from_seed(141).1, keypair_from_seed(142).1]);
+        let message = b"order test";
+        let signature = BLSAG::sign::<Sha3_512, OsRng>(sk, &ring, None, message).expect("sign");
+
+        let compressed_members = ring.compressed_members();
+
+        let mut verifier = StreamingBlsagVerifier::<Sha3_512>::new();
+        verifier
+            .init(
+                *signature.challenge(),
+                &signature.key_image().compress(),
+                message,
+                ring.len(),
+            )
+            .expect("init");
+
+        // Skip index 0, submit index 1 — should fail.
+        let err = verifier
+            .verify_member(1, &compressed_members[1], signature.responses()[1])
+            .unwrap_err();
+        assert_eq!(
+            err,
+            StreamingError::OutOfOrder {
+                expected: 0,
+                got: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn test_streaming_verify_empty_ring() {
+        let mut verifier = StreamingBlsagVerifier::<Sha3_512>::new();
+        let key_image = (Scalar::ONE * RISTRETTO_BASEPOINT_POINT).compress();
+        let err = verifier
+            .init(Scalar::ONE, &key_image, b"msg", 0)
+            .unwrap_err();
+        assert_eq!(err, StreamingError::EmptyRing);
+    }
+
+    #[test]
+    fn test_streaming_verify_invalid_key_image() {
+        let mut verifier = StreamingBlsagVerifier::<Sha3_512>::new();
+        let invalid_ki = CompressedRistretto::from_slice(&[0xFF; 32]).unwrap();
+        let err = verifier
+            .init(Scalar::ONE, &invalid_ki, b"msg", 3)
+            .unwrap_err();
+        assert_eq!(err, StreamingError::InvalidPoint);
+    }
+
+    #[test]
+    fn test_streaming_verify_call_after_done() {
+        let (sk, pk) = keypair_from_seed(150);
+        let ring = Ring::new(vec![pk]);
+        let message = b"done test";
+        let signature = BLSAG::sign::<Sha3_512, OsRng>(sk, &ring, None, message).expect("sign");
+
+        let compressed = ring.compressed_members();
+        let mut verifier = StreamingBlsagVerifier::<Sha3_512>::new();
+        verifier
+            .init(
+                *signature.challenge(),
+                &signature.key_image().compress(),
+                message,
+                1,
+            )
+            .expect("init");
+
+        let result = verifier
+            .verify_member(0, &compressed[0], signature.responses()[0])
+            .expect("verify_member");
+        assert!(matches!(result, VerifyStepOutput::Complete { valid: true }));
+
+        // Calling again should fail with InvalidState.
+        let err = verifier
+            .verify_member(0, &compressed[0], signature.responses()[0])
+            .unwrap_err();
+        assert_eq!(err, StreamingError::InvalidState);
     }
 
     #[test]
