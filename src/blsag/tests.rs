@@ -5,6 +5,8 @@ extern crate sha2;
 extern crate sha3;
 
 use super::*;
+#[allow(unused_imports)] // needed when smallvec-responses gates the parent prelude import
+use crate::prelude::*;
 use crate::traits::{SignRef, VerifyRef};
 use blake2::Blake2b512;
 use curve25519_dalek::constants;

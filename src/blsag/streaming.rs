@@ -47,6 +47,8 @@ pub enum StreamingError {
     EmptyRing,
     /// The secret key does not correspond to the ring member at the signer index.
     IdentityMismatch,
+    /// Phase 2 ring members do not match Phase 1 validated ring (ring-switch detected).
+    RingSwitchDetected,
 }
 
 impl core::fmt::Display for StreamingError {
@@ -67,6 +69,9 @@ impl core::fmt::Display for StreamingError {
             StreamingError::EmptyRing => write!(f, "ring length must be at least 1"),
             StreamingError::IdentityMismatch => {
                 write!(f, "secret key does not match ring member at signer index")
+            }
+            StreamingError::RingSwitchDetected => {
+                write!(f, "phase 2 ring does not match phase 1 validated ring")
             }
         }
     }
@@ -106,6 +111,33 @@ impl Drop for SecretScalar {
     }
 }
 
+/// Order-independent ring binding: XOR accumulator of indexed per-member hashes.
+///
+/// Each ring member contributes `SHA3-512("nazgul-ring-bind-v1" || index_le64 || compressed)[..32]`
+/// via XOR. Because XOR is commutative, the result is identical regardless of member
+/// submission order — allowing Phase 1 (canonical order) and Phase 2 (signing order)
+/// to be compared directly.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RingBinding([u8; 32]);
+
+impl RingBinding {
+    fn new() -> Self {
+        RingBinding([0u8; 32])
+    }
+
+    /// Absorb a ring member at position `index` into the accumulator.
+    fn accumulate(&mut self, index: usize, compressed: &CompressedRistretto) {
+        let hash = Sha3_512::new()
+            .chain_update(b"nazgul-ring-bind-v1")
+            .chain_update((index as u64).to_le_bytes())
+            .chain_update(compressed.as_bytes())
+            .finalize();
+        for (acc, h) in self.0.iter_mut().zip(hash[..32].iter()) {
+            *acc ^= h;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // State machine internals
 // ---------------------------------------------------------------------------
@@ -116,13 +148,15 @@ struct Validating {
     expected_ring_hash: RingHash,
     hasher: Sha3_512,
     members_seen: usize,
+    /// Order-independent accumulator binding Phase 1 ring to Phase 2.
+    ring_binding: RingBinding,
 }
 
 /// State after validation is complete and ring hash verified.
 struct Validated {
     ring_len: usize,
-    // ring_hash stored for future extensions (e.g., embedding in signature context).
-    _ring_hash: RingHash,
+    /// Order-independent binding computed during Phase 1.
+    ring_binding: RingBinding,
 }
 
 /// State after key image and initial nonce commitment are computed.
@@ -145,6 +179,10 @@ struct Signing<H: Digest<OutputSize = U64> + Clone + Default> {
     derived_signer_compressed: CompressedRistretto,
     /// How many signing members have been submitted.
     sign_step: usize,
+    /// Phase 1 ring binding (expected).
+    expected_ring_binding: RingBinding,
+    /// Phase 2 ring binding (accumulated from streamed members).
+    ring_binding: RingBinding,
 }
 
 enum State<H: Digest<OutputSize = U64> + Clone + Default> {
@@ -203,6 +241,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             expected_ring_hash,
             hasher: Sha3_512::default(),
             members_seen: 0,
+            ring_binding: RingBinding::new(),
         });
 
         Ok(())
@@ -240,6 +279,10 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
 
         // Feed compressed bytes into the running ring hash (SHA3-512, same as Ring::canonical_hash).
         validating.hasher.update(compressed.as_bytes());
+
+        // Accumulate into order-independent ring binding (Phase 1→Phase 2 anti-switch).
+        validating.ring_binding.accumulate(index, compressed);
+
         validating.members_seen += 1;
 
         // Check if validation is complete.
@@ -264,7 +307,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
 
             self.state = State::Validated(Validated {
                 ring_len: validating.ring_len,
-                _ring_hash: computed_hash,
+                ring_binding: validating.ring_binding,
             });
         }
 
@@ -310,6 +353,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         }
 
         let ring_len = validated.ring_len;
+        let expected_ring_binding = validated.ring_binding;
 
         // Decompress the signer's public key for Hp computation.
         let signer_pubkey = signer_pubkey_compressed
@@ -362,6 +406,8 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             secret_key: k,
             derived_signer_compressed: derived_pubkey,
             sign_step: 0,
+            expected_ring_binding,
+            ring_binding: RingBinding::new(),
         });
 
         Ok(())
@@ -403,9 +449,19 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             .decompress()
             .ok_or(StreamingError::InvalidPoint)?;
 
+        // Accumulate into Phase 2 ring binding (order-independent).
+        signing.ring_binding.accumulate(index, compressed);
+
         let is_signer_step = signing.sign_step == total_steps - 1;
 
         if is_signer_step {
+            // Verify Phase 2 ring matches Phase 1 validated ring (anti-switch).
+            // All N members have now been accumulated — compare the XOR accumulators.
+            if signing.ring_binding != signing.expected_ring_binding {
+                self.state = State::Poisoned;
+                return Err(StreamingError::RingSwitchDetected);
+            }
+
             // Verify the ring member at signer_index matches the derived pubkey.
             // This closes the gap between init_signing (which verified sk*G == claimed pk)
             // and the actual ring: the member delivered here during Phase 2 MUST equal
@@ -1426,5 +1482,90 @@ mod tests {
         // Second member (index 0 = signer slot) — must detect mismatch.
         let err = signer.sign_member(0, &compressed[0]).unwrap_err();
         assert_eq!(err, StreamingError::IdentityMismatch);
+    }
+
+    /// Regression test for issue #38: validate ring A in Phase 1, then stream
+    /// ring B (with the same signer pubkey at signer_index but different decoys)
+    /// in Phase 2. The ring binding mismatch must be detected.
+    #[test]
+    fn test_ring_switch_detected() {
+        // Ring A: signer + decoy_a
+        let (signer_sk, signer_pk) = keypair_from_seed(200);
+        let (_, decoy_a) = keypair_from_seed(201);
+        let ring_a = Ring::new(vec![signer_pk, decoy_a]);
+        let ring_a_hash = ring_a.canonical_hash();
+        let compressed_a = ring_a.compressed_members();
+
+        // Ring B: signer + decoy_b (different decoy, same signer at index 0)
+        let (_, decoy_b) = keypair_from_seed(202);
+        let ring_b = Ring::new(vec![signer_pk, decoy_b]);
+        let compressed_b = ring_b.compressed_members();
+
+        // Sanity: rings differ only in index 1.
+        assert_eq!(compressed_a[0], compressed_b[0]);
+        assert_ne!(compressed_a[1], compressed_b[1]);
+
+        let rng = ChaCha20Rng::from_seed([0x99; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
+
+        // Phase 1: validate ring A.
+        signer.init_validation(ring_a.len(), ring_a_hash).unwrap();
+        for i in 0..ring_a.len() {
+            signer.validate_member(i, &compressed_a[i]).unwrap();
+        }
+
+        // Phase 2: init signing with the real signer key (passes identity check).
+        let signer_index = 0;
+        signer
+            .init_signing(
+                signer_index,
+                signer_sk,
+                &signer_pk.compress(),
+                b"ring-switch test",
+            )
+            .unwrap();
+
+        // Stream ring B members in signing order: index 1 (non-signer), then 0 (signer).
+        // Index 1: decoy_b instead of decoy_a — non-signer step succeeds (binding
+        // is only checked at completion).
+        let step = signer.sign_member(1, &compressed_b[1]);
+        assert!(step.is_ok());
+
+        // Index 0 (signer step): ring binding mismatch detected.
+        let err = signer.sign_member(0, &compressed_b[0]).unwrap_err();
+        assert_eq!(err, StreamingError::RingSwitchDetected);
+    }
+
+    /// Verify that an honest signing pass (same ring in Phase 1 and Phase 2) still succeeds.
+    #[test]
+    fn test_honest_ring_binding_passes() {
+        let (signer_sk, signer_pk) = keypair_from_seed(230);
+        let (_, decoy1) = keypair_from_seed(231);
+        let (_, decoy2) = keypair_from_seed(232);
+        let ring = Ring::new(vec![signer_pk, decoy1, decoy2]);
+        let ring_hash = ring.canonical_hash();
+        let compressed = ring.compressed_members();
+
+        let rng = ChaCha20Rng::from_seed([0xAA; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
+
+        // Phase 1: validate ring.
+        signer.init_validation(ring.len(), ring_hash).unwrap();
+        for i in 0..ring.len() {
+            signer.validate_member(i, &compressed[i]).unwrap();
+        }
+
+        // Phase 2: sign with the same ring.
+        let signer_index = 0;
+        signer
+            .init_signing(signer_index, signer_sk, &signer_pk.compress(), b"honest test")
+            .unwrap();
+
+        // Signing order: 1, 2, 0
+        for step in 0..ring.len() {
+            let idx = (signer_index + 1 + step) % ring.len();
+            let result = signer.sign_member(idx, &compressed[idx]);
+            assert!(result.is_ok(), "sign_member({idx}) failed: {result:?}");
+        }
     }
 }
