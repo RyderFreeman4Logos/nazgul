@@ -111,28 +111,46 @@ impl Drop for SecretScalar {
     }
 }
 
-/// Order-independent ring binding: XOR accumulator of indexed per-member hashes.
+/// Order-independent ring binding for streaming anti-switch detection.
 ///
-/// Each ring member contributes `SHA3-512("nazgul-ring-bind-v1" || index_le64 || compressed)[..32]`
-/// via XOR. Because XOR is commutative, the result is identical regardless of member
-/// submission order — allowing Phase 1 (canonical order) and Phase 2 (signing order)
-/// to be compared directly.
+/// Uses a 512-bit XOR accumulator of indexed per-member SHA3-512 hashes.
+/// Each ring member contributes the full 64-byte output of
+/// `SHA3-512("nazgul-ring-bind-v2" || index_le64 || compressed)` via XOR.
+///
+/// # Why this is separate from [`RingHash`]
+///
+/// [`RingHash`] is the canonical, public ring identity — a sequential
+/// `SHA3-512(m_0 || m_1 || … || m_{N-1})` truncated to 32 bytes. Its
+/// collision resistance (~2^128) is independent of ring size.
+///
+/// This binding serves a different purpose: detecting ring-switch attacks
+/// between Phase 1 (canonical order) and Phase 2 (signing order) of the
+/// streaming protocol. Because Phase 2 delivers members in a different
+/// order, an order-*independent* accumulator is required. XOR-of-hashes
+/// is the simplest O(1)-memory scheme that achieves this.
+///
+/// Using 512 bits (the full SHA3-512 output) provides GBP resistance of
+/// `2^{512 / (1 + ⌊log₂ k⌋)}` where k is the number of attacker-controlled
+/// positions — ≥ 2^128 for rings up to 16 members, ≥ 2^73 for rings
+/// up to 64 members.
+///
+/// [`RingHash`]: crate::ring::RingHash
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct RingBinding([u8; 32]);
+struct RingBinding([u8; 64]);
 
 impl RingBinding {
     fn new() -> Self {
-        RingBinding([0u8; 32])
+        RingBinding([0u8; 64])
     }
 
     /// Absorb a ring member at position `index` into the accumulator.
     fn accumulate(&mut self, index: usize, compressed: &CompressedRistretto) {
         let hash = Sha3_512::new()
-            .chain_update(b"nazgul-ring-bind-v1")
+            .chain_update(b"nazgul-ring-bind-v2")
             .chain_update((index as u64).to_le_bytes())
             .chain_update(compressed.as_bytes())
             .finalize();
-        for (acc, h) in self.0.iter_mut().zip(hash[..32].iter()) {
+        for (acc, h) in self.0.iter_mut().zip(hash.iter()) {
             *acc ^= h;
         }
     }
