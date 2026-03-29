@@ -70,6 +70,7 @@ pub use streaming::{
     StepOutput, StreamingBlsagSigner, StreamingBlsagVerifier, StreamingError, VerifyStepOutput,
 };
 
+#[cfg(not(feature = "smallvec-responses"))]
 use crate::prelude::*;
 use crate::ring::Ring;
 use crate::traits::LinkRef;

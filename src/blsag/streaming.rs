@@ -27,6 +27,7 @@ use digest::generic_array::typenum::U64;
 use digest::Digest;
 use rand_core::{CryptoRng, RngCore};
 use sha3::Sha3_512;
+use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
 /// Errors specific to the streaming signing protocol.
@@ -304,7 +305,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         // Verify the secret key corresponds to the claimed signer public key.
         // This mirrors the SignerNotFound check in the one-shot BLSAG::sign.
         let derived_pubkey = (secret_key * constants::RISTRETTO_BASEPOINT_POINT).compress();
-        if derived_pubkey != *signer_pubkey_compressed {
+        if derived_pubkey.as_bytes().ct_eq(signer_pubkey_compressed.as_bytes()).unwrap_u8() == 0 {
             return Err(StreamingError::IdentityMismatch);
         }
 
@@ -409,7 +410,12 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             // This closes the gap between init_signing (which verified sk*G == claimed pk)
             // and the actual ring: the member delivered here during Phase 2 MUST equal
             // the pubkey we derived from the secret key.
-            if *compressed != signing.derived_signer_compressed {
+            if compressed
+                .as_bytes()
+                .ct_eq(signing.derived_signer_compressed.as_bytes())
+                .unwrap_u8()
+                == 0
+            {
                 self.state = State::Poisoned;
                 return Err(StreamingError::IdentityMismatch);
             }
