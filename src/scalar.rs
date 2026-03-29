@@ -44,7 +44,9 @@ impl LocalByteConvertible for RistrettoPoint {
     }
 
     fn from_base58(input: String) -> AResult<Self> {
-        let bytes = bs58::decode(input).into_vec()?;
+        let bytes = bs58::decode(input)
+            .into_vec()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         Self::from_bytes(&bytes)
     }
@@ -106,7 +108,9 @@ impl LocalByteConvertible for Scalar {
     }
 
     fn from_base58(input: String) -> AResult<Self> {
-        let bytes = bs58::decode(input).into_vec()?;
+        let bytes = bs58::decode(input)
+            .into_vec()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         Self::from_bytes(&bytes)
     }
 }

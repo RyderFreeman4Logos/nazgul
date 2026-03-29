@@ -56,21 +56,22 @@ impl KeyImageGen<Vec<Scalar>, Vec<RistrettoPoint>> for MLSAG {
     }
 }
 
-impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for MLSAG {
-    /// To sign you need `ks` which is the set of private keys you want to sign with. The `ring` contains
-    /// public keys for everybody except you. Your public key will be inserted into it at random (secret)
-    /// index. The `message` is what you are signing
-    fn sign<
+impl MLSAG {
+    /// Signs a message using an externally provided RNG.
+    ///
+    /// This is the core signing implementation that accepts an external `rng` source,
+    /// enabling use on embedded devices with hardware TRNGs or deterministic testing
+    /// with seeded RNGs.
+    pub fn sign_with_rng<
         Hash: Digest<OutputSize = U64> + Clone + Default,
-        CSPRNG: CryptoRng + RngCore + Default,
+        R: CryptoRng + RngCore,
     >(
         ks: Vec<Scalar>,
         mut ring: Vec<Vec<RistrettoPoint>>,
         secret_index: usize,
         message: &[u8],
+        rng: &mut R,
     ) -> MLSAG {
-        let mut csprng = CSPRNG::default();
-
         // Row count of matrix
         let nr = ring.len() + 1;
         // Column count of matrix
@@ -86,10 +87,10 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for MLSAG {
 
         ring.insert(secret_index, k_points.clone());
 
-        let a: Vec<Scalar> = (0..nc).map(|_| Scalar::random(&mut csprng)).collect();
+        let a: Vec<Scalar> = (0..nc).map(|_| Scalar::random(rng)).collect();
 
         let mut rs: Vec<Vec<Scalar>> = (0..nr)
-            .map(|_| (0..nc).map(|_| Scalar::random(&mut csprng)).collect())
+            .map(|_| (0..nc).map(|_| Scalar::random(rng)).collect())
             .collect();
 
         let mut cs: Vec<Scalar> = (0..nr).map(|_| Scalar::ZERO).collect();
@@ -169,6 +170,23 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for MLSAG {
             ring,
             key_images,
         }
+    }
+}
+
+impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for MLSAG {
+    /// Convenience wrapper that creates a CSPRNG via `Default` and delegates to
+    /// [`MLSAG::sign_with_rng`].
+    fn sign<
+        Hash: Digest<OutputSize = U64> + Clone + Default,
+        CSPRNG: CryptoRng + RngCore + Default,
+    >(
+        ks: Vec<Scalar>,
+        ring: Vec<Vec<RistrettoPoint>>,
+        secret_index: usize,
+        message: &[u8],
+    ) -> MLSAG {
+        let mut csprng = CSPRNG::default();
+        MLSAG::sign_with_rng::<Hash, CSPRNG>(ks, ring, secret_index, message, &mut csprng)
     }
 }
 

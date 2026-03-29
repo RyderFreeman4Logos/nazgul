@@ -1,6 +1,6 @@
 use crate::prelude::*;
 use crate::ring::{PreparedRing, Ring, RingContext};
-use crate::traits::{SignRef, VerifyRef};
+use crate::traits::VerifyRef;
 use curve25519_dalek::scalar::Scalar;
 use digest::generic_array::typenum::U64;
 use digest::Digest;
@@ -36,9 +36,32 @@ impl ContextualBLSAG {
         &self.context
     }
 
+    /// Signs a message in Compact mode using an externally provided RNG.
+    ///
+    /// Stores only the Ring's canonical hash. Use this when you expect the verifier
+    /// to have access to the Ring definition. Accepts an external `rng` source for
+    /// embedded/hardware TRNG support.
+    pub fn sign_compact_with_rng<
+        H: Digest<OutputSize = U64> + Clone + Default,
+        R: CryptoRng + RngCore,
+    >(
+        k: Scalar,
+        ring: &Ring,
+        precomputed_data: Option<&PreparedRing<H>>,
+        message: &[u8],
+        rng: &mut R,
+    ) -> Result<Self, SignatureError> {
+        let signature = BLSAG::sign_with_rng::<H, R>(k, ring, precomputed_data, message, rng)?;
+        Ok(Self {
+            signature,
+            context: RingContext::Compact(ring.canonical_hash()),
+        })
+    }
+
     /// Signs a message and stores only the Ring's canonical hash (Compact mode).
     ///
-    /// Use this when you expect the verifier to have access to the Ring definition.
+    /// Convenience wrapper that creates a CSPRNG via `Default` and delegates to
+    /// [`sign_compact_with_rng`](Self::sign_compact_with_rng).
     pub fn sign_compact<
         H: Digest<OutputSize = U64> + Clone + Default,
         CSPRNG: CryptoRng + RngCore + Default,
@@ -48,16 +71,36 @@ impl ContextualBLSAG {
         precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
     ) -> Result<Self, SignatureError> {
-        let signature = BLSAG::sign::<H, CSPRNG>(k, ring, precomputed_data, message)?;
+        let mut csprng = CSPRNG::default();
+        Self::sign_compact_with_rng::<H, CSPRNG>(k, ring, precomputed_data, message, &mut csprng)
+    }
+
+    /// Signs a message in Archival mode using an externally provided RNG.
+    ///
+    /// Stores the full Ring alongside the signature. Use this when you want a
+    /// self-contained signature. Accepts an external `rng` source for
+    /// embedded/hardware TRNG support.
+    pub fn sign_archival_with_rng<
+        H: Digest<OutputSize = U64> + Clone + Default,
+        R: CryptoRng + RngCore,
+    >(
+        k: Scalar,
+        ring: &Ring,
+        precomputed_data: Option<&PreparedRing<H>>,
+        message: &[u8],
+        rng: &mut R,
+    ) -> Result<Self, SignatureError> {
+        let signature = BLSAG::sign_with_rng::<H, R>(k, ring, precomputed_data, message, rng)?;
         Ok(Self {
             signature,
-            context: RingContext::Compact(ring.canonical_hash()),
+            context: RingContext::Archival(ring.clone()),
         })
     }
 
     /// Signs a message and stores the full Ring (Archival mode).
     ///
-    /// Use this when you want a self-contained signature.
+    /// Convenience wrapper that creates a CSPRNG via `Default` and delegates to
+    /// [`sign_archival_with_rng`](Self::sign_archival_with_rng).
     pub fn sign_archival<
         H: Digest<OutputSize = U64> + Clone + Default,
         CSPRNG: CryptoRng + RngCore + Default,
@@ -67,33 +110,54 @@ impl ContextualBLSAG {
         precomputed_data: Option<&PreparedRing<H>>,
         message: &[u8],
     ) -> Result<Self, SignatureError> {
-        let signature = BLSAG::sign::<H, CSPRNG>(k, ring, precomputed_data, message)?;
-        Ok(Self {
-            signature,
-            context: RingContext::Archival(ring.clone()),
-        })
+        let mut csprng = CSPRNG::default();
+        Self::sign_archival_with_rng::<H, CSPRNG>(k, ring, precomputed_data, message, &mut csprng)
     }
 
-    /// Generates a fake ContextualBLSAG with Compact context.
+    /// Generates a fake ContextualBLSAG with Compact context using an externally provided RNG.
     ///
-    /// See `BLSAG::generate_fake` for details.
-    pub fn generate_fake_compact<CSPRNG: CryptoRng + RngCore + Default>(ring: &Ring) -> Self {
-        let signature = BLSAG::generate_fake::<CSPRNG>(ring);
+    /// See `BLSAG::generate_fake_with_rng` for details.
+    pub fn generate_fake_compact_with_rng<R: CryptoRng + RngCore>(
+        ring: &Ring,
+        rng: &mut R,
+    ) -> Self {
+        let signature = BLSAG::generate_fake_with_rng(ring, rng);
         Self {
             signature,
             context: RingContext::Compact(ring.canonical_hash()),
         }
     }
 
-    /// Generates a fake ContextualBLSAG with Archival context.
+    /// Generates a fake ContextualBLSAG with Compact context.
     ///
-    /// See `BLSAG::generate_fake` for details.
-    pub fn generate_fake_archival<CSPRNG: CryptoRng + RngCore + Default>(ring: &Ring) -> Self {
-        let signature = BLSAG::generate_fake::<CSPRNG>(ring);
+    /// Convenience wrapper that creates a CSPRNG via `Default` and delegates to
+    /// [`generate_fake_compact_with_rng`](Self::generate_fake_compact_with_rng).
+    pub fn generate_fake_compact<CSPRNG: CryptoRng + RngCore + Default>(ring: &Ring) -> Self {
+        let mut csprng = CSPRNG::default();
+        Self::generate_fake_compact_with_rng(ring, &mut csprng)
+    }
+
+    /// Generates a fake ContextualBLSAG with Archival context using an externally provided RNG.
+    ///
+    /// See `BLSAG::generate_fake_with_rng` for details.
+    pub fn generate_fake_archival_with_rng<R: CryptoRng + RngCore>(
+        ring: &Ring,
+        rng: &mut R,
+    ) -> Self {
+        let signature = BLSAG::generate_fake_with_rng(ring, rng);
         Self {
             signature,
             context: RingContext::Archival(ring.clone()),
         }
+    }
+
+    /// Generates a fake ContextualBLSAG with Archival context.
+    ///
+    /// Convenience wrapper that creates a CSPRNG via `Default` and delegates to
+    /// [`generate_fake_archival_with_rng`](Self::generate_fake_archival_with_rng).
+    pub fn generate_fake_archival<CSPRNG: CryptoRng + RngCore + Default>(ring: &Ring) -> Self {
+        let mut csprng = CSPRNG::default();
+        Self::generate_fake_archival_with_rng(ring, &mut csprng)
     }
 
     /// Verifies the signature.
