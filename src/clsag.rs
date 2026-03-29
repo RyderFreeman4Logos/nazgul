@@ -48,7 +48,9 @@ impl KeyImageGen<Vec<Scalar>, Vec<RistrettoPoint>> for CLSAG {
         // This is the base key
         // i.e. the first public key for which the prover has the private key
         let base_key_hashed_to_point: RistrettoPoint = RistrettoPoint::from_hash(
-            Hash::default().chain_update(k_points[0].compress().as_bytes()),
+            Hash::default()
+                .chain_update(b"nazgul-H_p-v3")
+                .chain_update(k_points[0].compress().as_bytes()),
         );
 
         let key_images: Vec<RistrettoPoint> =
@@ -58,21 +60,22 @@ impl KeyImageGen<Vec<Scalar>, Vec<RistrettoPoint>> for CLSAG {
     }
 }
 
-impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for CLSAG {
-    /// To sign you need `ks` which is the set of private keys you want to sign with. Only the
-    /// first one is linkable. The `ring` contains public keys for everybody except you. Your
-    /// public key will be inserted into it at random (secret) index. The `message` is what you are signing
-    fn sign<
+impl CLSAG {
+    /// Signs a message using an externally provided RNG.
+    ///
+    /// This is the core signing implementation that accepts an external `rng` source,
+    /// enabling use on embedded devices with hardware TRNGs or deterministic testing
+    /// with seeded RNGs.
+    pub fn sign_with_rng<
         Hash: Digest<OutputSize = U64> + Clone + Default,
-        CSPRNG: CryptoRng + RngCore + Default,
+        R: CryptoRng + RngCore,
     >(
         ks: Vec<Scalar>,
         mut ring: Vec<Vec<RistrettoPoint>>,
         secret_index: usize,
         message: &[u8],
+        rng: &mut R,
     ) -> CLSAG {
-        let mut csprng = CSPRNG::default();
-
         let nr = ring.len() + 1;
         let nc = ring[0].len();
 
@@ -85,16 +88,18 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for CLSAG {
         // This is the base key
         // i.e. the first public key for which the prover has the private key
         let base_key_hashed_to_point: RistrettoPoint = RistrettoPoint::from_hash(
-            Hash::default().chain_update(k_points[0].compress().as_bytes()),
+            Hash::default()
+                .chain_update(b"nazgul-H_p-v3")
+                .chain_update(k_points[0].compress().as_bytes()),
         );
 
         let key_images: Vec<RistrettoPoint> = CLSAG::generate_key_image::<Hash>(ks.clone());
 
         ring.insert(secret_index, k_points.clone());
 
-        let a: Scalar = Scalar::random(&mut csprng);
+        let a: Scalar = Scalar::random(rng);
 
-        let mut rs: Vec<Scalar> = (0..nr).map(|_| Scalar::random(&mut csprng)).collect();
+        let mut rs: Vec<Scalar> = (0..nr).map(|_| Scalar::random(rng)).collect();
 
         let mut cs: Vec<Scalar> = (0..nr).map(|_| Scalar::ZERO).collect();
 
@@ -103,7 +108,7 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for CLSAG {
         let prefixed_hashes: Vec<Hash> = (0..nc)
             .map(|index| {
                 let mut h: Hash = Hash::default();
-                h.update(format!("CSLAG_{}", index).as_bytes());
+                h.update(format!("CSLAG_{index}").as_bytes());
                 for row in ring.iter().take(nr) {
                     for key in row.iter().take(nc) {
                         h.update(key.compress().as_bytes());
@@ -153,6 +158,7 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for CLSAG {
         let mut hashes: Vec<Hash> = (0..nr)
             .map(|_| {
                 let mut h: Hash = Hash::default();
+                h.update(b"nazgul-chal-v3");
                 h.update(b"CSLAG_c");
                 for row in ring.iter().take(nr) {
                     for key in row.iter().take(nc) {
@@ -192,7 +198,9 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for CLSAG {
                     &[rs[i % nr], cs[i % nr]],
                     &[
                         RistrettoPoint::from_hash(
-                            Hash::default().chain_update(ring[i % nr][0].compress().as_bytes()),
+                            Hash::default()
+                                .chain_update(b"nazgul-H_p-v3")
+                                .chain_update(ring[i % nr][0].compress().as_bytes()),
                         ),
                         aggregate_key_image,
                     ],
@@ -222,6 +230,23 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for CLSAG {
     }
 }
 
+impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for CLSAG {
+    /// Convenience wrapper that creates a CSPRNG via `Default` and delegates to
+    /// [`CLSAG::sign_with_rng`].
+    fn sign<
+        Hash: Digest<OutputSize = U64> + Clone + Default,
+        CSPRNG: CryptoRng + RngCore + Default,
+    >(
+        ks: Vec<Scalar>,
+        ring: Vec<Vec<RistrettoPoint>>,
+        secret_index: usize,
+        message: &[u8],
+    ) -> CLSAG {
+        let mut csprng = CSPRNG::default();
+        CLSAG::sign_with_rng::<Hash, CSPRNG>(ks, ring, secret_index, message, &mut csprng)
+    }
+}
+
 impl Verify for CLSAG {
     /// To verify a `signature` you need the `message` too
     fn verify<Hash: Digest<OutputSize = U64> + Clone + Default>(
@@ -237,7 +262,7 @@ impl Verify for CLSAG {
         let prefixed_hashes: Vec<Hash> = (0..nc)
             .map(|index| {
                 let mut h: Hash = Hash::default();
-                h.update(format!("CSLAG_{}", index).as_bytes());
+                h.update(format!("CSLAG_{index}").as_bytes());
                 for row in signature.ring.iter().take(nr) {
                     for key in row.iter().take(nc) {
                         h.update(key.compress().as_bytes());
@@ -278,6 +303,7 @@ impl Verify for CLSAG {
             .sum();
         for (i, aggregate_public_key) in aggregate_public_keys.iter().enumerate().take(nr) {
             let mut h: Hash = Hash::default();
+            h.update(b"nazgul-chal-v3");
             h.update(b"CSLAG_c");
             for row in signature.ring.iter().take(nr) {
                 for key in row.iter().take(nc) {
@@ -299,7 +325,9 @@ impl Verify for CLSAG {
                     &[signature.responses[i], reconstructed_c],
                     &[
                         RistrettoPoint::from_hash(
-                            Hash::new().chain_update(signature.ring[i][0].compress().as_bytes()),
+                            Hash::new()
+                                .chain_update(b"nazgul-H_p-v3")
+                                .chain_update(signature.ring[i][0].compress().as_bytes()),
                         ),
                         aggregate_key_image,
                     ],

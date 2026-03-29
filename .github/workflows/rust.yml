@@ -47,5 +47,11 @@ jobs:
       - name: Run clippy on serde
         run: cargo clippy --features serde-derive -- -D warnings
 
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Check wasm32 compilation
+        run: cargo check --target wasm32-unknown-unknown --no-default-features --features wasm
+
       - name: Run security audit
-        run: cargo audit 
+        run: cargo audit

@@ -840,3 +840,21 @@ healthchecksdb
 MigrationBackup/
 
 # End of https://www.gitignore.io/api/vim,rust,xcode,clion,emacs,eclipse,sublimetext,intellij+all,visualstudio,androidstudio,visualstudiocode
+
+# Gemini-related files
+GEMINI.md
+gh_pr_draft.md
+.aider*
+**/*.zh.md
+pkg
+AGENTS.md
+.csa
+.weave
+.cargo-local
+.agents/
+.claude/
+.codex/
+.gemini/
+CLAUDE.md
+drafts
+

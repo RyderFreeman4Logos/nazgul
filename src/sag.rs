@@ -26,26 +26,30 @@ pub struct SAG {
     pub ring: Vec<RistrettoPoint>,
 }
 
-impl Sign<Scalar, Vec<RistrettoPoint>> for SAG {
-    /// To sign you need `k` your private key, and `ring` which is the public keys of everyone
-    /// except you. You are signing the `message`
-    fn sign<
+impl SAG {
+    /// Signs a message using an externally provided RNG.
+    ///
+    /// This is the core signing implementation that accepts an external `rng` source,
+    /// enabling use on embedded devices with hardware TRNGs or deterministic testing
+    /// with seeded RNGs.
+    pub fn sign_with_rng<
         Hash: Digest<OutputSize = U64> + Clone + Default,
-        CSPRNG: CryptoRng + RngCore + Default,
+        R: CryptoRng + RngCore,
     >(
         k: Scalar,
         mut ring: Vec<RistrettoPoint>,
         secret_index: usize,
         message: &[u8],
+        rng: &mut R,
     ) -> SAG {
-        let mut csprng: CSPRNG = CSPRNG::default();
         let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
         let n = ring.len() + 1;
         ring.insert(secret_index, k_point);
-        let a: Scalar = Scalar::random(&mut csprng);
-        let mut rs: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut csprng)).collect();
+        let a: Scalar = Scalar::random(rng);
+        let mut rs: Vec<Scalar> = (0..n).map(|_| Scalar::random(rng)).collect();
         let mut cs: Vec<Scalar> = (0..n).map(|_| Scalar::ZERO).collect();
         let mut group_and_message_hash = Hash::new();
+        group_and_message_hash.update(b"nazgul-chal-v3");
         for k_point in &ring {
             group_and_message_hash.update(k_point.compress().as_bytes());
         }
@@ -85,6 +89,23 @@ impl Sign<Scalar, Vec<RistrettoPoint>> for SAG {
     }
 }
 
+impl Sign<Scalar, Vec<RistrettoPoint>> for SAG {
+    /// Convenience wrapper that creates a CSPRNG via `Default` and delegates to
+    /// [`SAG::sign_with_rng`].
+    fn sign<
+        Hash: Digest<OutputSize = U64> + Clone + Default,
+        CSPRNG: CryptoRng + RngCore + Default,
+    >(
+        k: Scalar,
+        ring: Vec<RistrettoPoint>,
+        secret_index: usize,
+        message: &[u8],
+    ) -> SAG {
+        let mut csprng = CSPRNG::default();
+        SAG::sign_with_rng::<Hash, CSPRNG>(k, ring, secret_index, message, &mut csprng)
+    }
+}
+
 impl Verify for SAG {
     /// To verify a `signature` you need the `message` too
     fn verify<Hash: Digest<OutputSize = U64> + Clone + Default>(
@@ -94,6 +115,7 @@ impl Verify for SAG {
         let n = signature.ring.len();
         let mut reconstructed_c: Scalar = signature.challenge;
         let mut group_and_message_hash = Hash::new();
+        group_and_message_hash.update(b"nazgul-chal-v3");
         for k_point in &signature.ring {
             group_and_message_hash.update(k_point.compress().as_bytes());
         }

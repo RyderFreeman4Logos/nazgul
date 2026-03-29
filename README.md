@@ -32,4 +32,6 @@ All tests are run automatically on pull requests and commits via GitHub Actions.
 
 # Documentation
 
-It is [here](https://docs.rs/nazgul/latest/nazgul/)
+- API docs: [docs.rs/nazgul](https://docs.rs/nazgul/latest/nazgul/)
+- [Native performance guide](docs/performance.md)
+- [WASM build guide](docs/WASM.md)

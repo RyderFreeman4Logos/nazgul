@@ -1,0 +1,2 @@
+[alias]
+wasm-check = "check --target wasm32-unknown-unknown --no-default-features --features wasm"

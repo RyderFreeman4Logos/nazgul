@@ -35,7 +35,24 @@ extern crate rand_core;
 
 pub mod blsag;
 pub mod clsag;
+pub mod error;
+pub mod keypair;
 pub mod mlsag;
+#[cfg(all(
+    feature = "std",
+    feature = "cpu-time",
+    not(feature = "wasm"),
+    not(target_arch = "wasm32"),
+))]
+pub mod pow;
 pub(crate) mod prelude;
+pub mod ring;
 pub mod sag;
+pub mod scalar;
 pub mod traits;
+
+#[cfg(feature = "blake3")]
+pub mod blake3_compat;
+
+#[cfg(feature = "wasm")]
+pub mod wasm;

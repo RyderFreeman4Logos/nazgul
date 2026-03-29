@@ -45,7 +45,9 @@ impl KeyImageGen<Vec<Scalar>, Vec<RistrettoPoint>> for MLSAG {
             .map(|j| {
                 ks[j]
                     * RistrettoPoint::from_hash(
-                        Hash::default().chain_update(k_points[j].compress().as_bytes()),
+                        Hash::default()
+                            .chain_update(b"nazgul-H_p-v3")
+                            .chain_update(k_points[j].compress().as_bytes()),
                     )
             })
             .collect();
@@ -54,21 +56,22 @@ impl KeyImageGen<Vec<Scalar>, Vec<RistrettoPoint>> for MLSAG {
     }
 }
 
-impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for MLSAG {
-    /// To sign you need `ks` which is the set of private keys you want to sign with. The `ring` contains
-    /// public keys for everybody except you. Your public key will be inserted into it at random (secret)
-    /// index. The `message` is what you are signing
-    fn sign<
+impl MLSAG {
+    /// Signs a message using an externally provided RNG.
+    ///
+    /// This is the core signing implementation that accepts an external `rng` source,
+    /// enabling use on embedded devices with hardware TRNGs or deterministic testing
+    /// with seeded RNGs.
+    pub fn sign_with_rng<
         Hash: Digest<OutputSize = U64> + Clone + Default,
-        CSPRNG: CryptoRng + RngCore + Default,
+        R: CryptoRng + RngCore,
     >(
         ks: Vec<Scalar>,
         mut ring: Vec<Vec<RistrettoPoint>>,
         secret_index: usize,
         message: &[u8],
+        rng: &mut R,
     ) -> MLSAG {
-        let mut csprng = CSPRNG::default();
-
         // Row count of matrix
         let nr = ring.len() + 1;
         // Column count of matrix
@@ -84,17 +87,17 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for MLSAG {
 
         ring.insert(secret_index, k_points.clone());
 
-        let a: Vec<Scalar> = (0..nc).map(|_| Scalar::random(&mut csprng)).collect();
+        let a: Vec<Scalar> = (0..nc).map(|_| Scalar::random(rng)).collect();
 
         let mut rs: Vec<Vec<Scalar>> = (0..nr)
-            .map(|_| (0..nc).map(|_| Scalar::random(&mut csprng)).collect())
+            .map(|_| (0..nc).map(|_| Scalar::random(rng)).collect())
             .collect();
 
         let mut cs: Vec<Scalar> = (0..nr).map(|_| Scalar::ZERO).collect();
 
         // Hash of message is shared by all challenges H_n(m, ....)
         let mut message_hash = Hash::default();
-
+        message_hash.update(b"nazgul-chal-v3");
         message_hash.update(message);
 
         let mut hashes: Vec<Hash> = (0..nr).map(|_| message_hash.clone()).collect();
@@ -108,7 +111,9 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for MLSAG {
             hashes[(secret_index + 1) % nr].update(
                 (a[j]
                     * RistrettoPoint::from_hash(
-                        Hash::default().chain_update(k_points[j].compress().as_bytes()),
+                        Hash::default()
+                            .chain_update(b"nazgul-H_p-v3")
+                            .chain_update(k_points[j].compress().as_bytes()),
                     ))
                 .compress()
                 .as_bytes(),
@@ -133,7 +138,9 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for MLSAG {
                         &[rs[i % nr][j], cs[i % nr]],
                         &[
                             RistrettoPoint::from_hash(
-                                Hash::default().chain_update(ring[i % nr][j].compress().as_bytes()),
+                                Hash::default()
+                                    .chain_update(b"nazgul-H_p-v3")
+                                    .chain_update(ring[i % nr][j].compress().as_bytes()),
                             ),
                             *key_image,
                         ],
@@ -166,6 +173,23 @@ impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for MLSAG {
     }
 }
 
+impl Sign<Vec<Scalar>, Vec<Vec<RistrettoPoint>>> for MLSAG {
+    /// Convenience wrapper that creates a CSPRNG via `Default` and delegates to
+    /// [`MLSAG::sign_with_rng`].
+    fn sign<
+        Hash: Digest<OutputSize = U64> + Clone + Default,
+        CSPRNG: CryptoRng + RngCore + Default,
+    >(
+        ks: Vec<Scalar>,
+        ring: Vec<Vec<RistrettoPoint>>,
+        secret_index: usize,
+        message: &[u8],
+    ) -> MLSAG {
+        let mut csprng = CSPRNG::default();
+        MLSAG::sign_with_rng::<Hash, CSPRNG>(ks, ring, secret_index, message, &mut csprng)
+    }
+}
+
 impl Verify for MLSAG {
     /// To verify a `signature` you need the `message` too
     fn verify<Hash: Digest<OutputSize = U64> + Clone + Default>(
@@ -179,6 +203,7 @@ impl Verify for MLSAG {
         let nc = signature.ring[0].len();
         for _i in 0..nr {
             let mut h: Hash = Hash::default();
+            h.update(b"nazgul-chal-v3");
             h.update(message);
 
             for (j, key_image) in signature.key_images.iter().enumerate().take(nc) {
@@ -197,6 +222,7 @@ impl Verify for MLSAG {
                         &[
                             RistrettoPoint::from_hash(
                                 Hash::default()
+                                    .chain_update(b"nazgul-H_p-v3")
                                     .chain_update(signature.ring[_i][j].compress().as_bytes()),
                             ),
                             *key_image,
