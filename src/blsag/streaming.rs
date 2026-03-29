@@ -44,6 +44,8 @@ pub enum StreamingError {
     InvalidState,
     /// Ring length must be at least 1.
     EmptyRing,
+    /// The secret key does not correspond to the ring member at the signer index.
+    IdentityMismatch,
 }
 
 impl core::fmt::Display for StreamingError {
@@ -62,6 +64,9 @@ impl core::fmt::Display for StreamingError {
             }
             StreamingError::InvalidState => write!(f, "operation not valid in current state"),
             StreamingError::EmptyRing => write!(f, "ring length must be at least 1"),
+            StreamingError::IdentityMismatch => {
+                write!(f, "secret key does not match ring member at signer index")
+            }
         }
     }
 }
@@ -134,10 +139,11 @@ struct Signing<H: Digest<OutputSize = U64> + Clone + Default> {
     alpha: SecretScalar,
     /// Secret key (zeroized on drop).
     secret_key: SecretScalar,
+    /// Derived signer public key (secret_key * G), stored for ring-membership
+    /// verification during Phase 2.
+    derived_signer_compressed: CompressedRistretto,
     /// How many signing members have been submitted.
     sign_step: usize,
-    /// Whether c_0 has been captured yet.
-    c_0_captured: bool,
 }
 
 enum State<H: Digest<OutputSize = U64> + Clone + Default> {
@@ -295,6 +301,13 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             });
         }
 
+        // Verify the secret key corresponds to the claimed signer public key.
+        // This mirrors the SignerNotFound check in the one-shot BLSAG::sign.
+        let derived_pubkey = (secret_key * constants::RISTRETTO_BASEPOINT_POINT).compress();
+        if derived_pubkey != *signer_pubkey_compressed {
+            return Err(StreamingError::IdentityMismatch);
+        }
+
         let ring_len = validated.ring_len;
 
         // Decompress the signer's public key for Hp computation.
@@ -346,8 +359,8 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             c_0,
             alpha,
             secret_key: k,
+            derived_signer_compressed: derived_pubkey,
             sign_step: 0,
-            c_0_captured: signer_index == ring_len - 1,
         });
 
         Ok(())
@@ -392,6 +405,15 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         let is_signer_step = signing.sign_step == total_steps - 1;
 
         if is_signer_step {
+            // Verify the ring member at signer_index matches the derived pubkey.
+            // This closes the gap between init_signing (which verified sk*G == claimed pk)
+            // and the actual ring: the member delivered here during Phase 2 MUST equal
+            // the pubkey we derived from the secret key.
+            if *compressed != signing.derived_signer_compressed {
+                self.state = State::Poisoned;
+                return Err(StreamingError::IdentityMismatch);
+            }
+
             // This is the signer's own slot (index == pi).
             // Compute s_pi = alpha - c_current * k.
             let s_pi = signing.alpha.0 - (signing.c_current * signing.secret_key.0);
@@ -441,7 +463,6 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             // Capture c_0 when we process index N-1.
             if index == ring_len - 1 {
                 signing.c_0 = signing.c_current;
-                signing.c_0_captured = true;
             }
 
             Ok(StepOutput::ScalarResponse { index, s_i })
@@ -1297,5 +1318,107 @@ mod tests {
         // Now trying to sign again should fail.
         let err = signer.sign_member(0, &members[0].compress()).unwrap_err();
         assert_eq!(err, StreamingError::InvalidState);
+    }
+
+    #[test]
+    fn test_correct_signer_identity_passes() {
+        let (sk, pk) = keypair_from_seed(200);
+        let ring = Ring::new(vec![pk, keypair_from_seed(201).1]);
+        let ring_hash = ring.canonical_hash();
+        let compressed = ring.compressed_members();
+        let members = ring.members();
+
+        let signer_pk = sk * RISTRETTO_BASEPOINT_POINT;
+        let signer_index = members
+            .iter()
+            .position(|p| p.compress() == signer_pk.compress())
+            .unwrap();
+
+        let rng = ChaCha20Rng::from_seed([0x66; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
+
+        signer.init_validation(ring.len(), ring_hash).unwrap();
+        for i in 0..ring.len() {
+            signer.validate_member(i, &compressed[i]).unwrap();
+        }
+
+        // Correct secret key for the signer at signer_index — should succeed.
+        let result = signer.init_signing(signer_index, sk, &signer_pk.compress(), b"test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_wrong_secret_key_returns_identity_mismatch() {
+        let (sk, pk) = keypair_from_seed(210);
+        let (wrong_sk, _wrong_pk) = keypair_from_seed(211);
+        let ring = Ring::new(vec![pk, keypair_from_seed(212).1]);
+        let ring_hash = ring.canonical_hash();
+        let compressed = ring.compressed_members();
+        let members = ring.members();
+
+        let signer_pk = sk * RISTRETTO_BASEPOINT_POINT;
+        let signer_index = members
+            .iter()
+            .position(|p| p.compress() == signer_pk.compress())
+            .unwrap();
+
+        let rng = ChaCha20Rng::from_seed([0x77; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
+
+        signer.init_validation(ring.len(), ring_hash).unwrap();
+        for i in 0..ring.len() {
+            signer.validate_member(i, &compressed[i]).unwrap();
+        }
+
+        // Wrong secret key does not match the pubkey at signer_index.
+        let err = signer
+            .init_signing(signer_index, wrong_sk, &signer_pk.compress(), b"test")
+            .unwrap_err();
+        assert_eq!(err, StreamingError::IdentityMismatch);
+    }
+
+    /// Regression test for codex review P1: a self-consistent (sk, pk) pair that
+    /// passes the init_signing check but whose pubkey is NOT the ring member at
+    /// signer_index. The mismatch must be caught during Phase 2 sign_member.
+    #[test]
+    fn test_signer_not_in_ring_at_claimed_index() {
+        // Create a ring of two members from seeds 220 and 221.
+        let (_sk0, pk0) = keypair_from_seed(220);
+        let (_sk1, pk1) = keypair_from_seed(221);
+        let ring = Ring::new(vec![pk0, pk1]);
+        let ring_hash = ring.canonical_hash();
+        let compressed = ring.compressed_members();
+
+        // Outsider: valid keypair that is NOT in the ring.
+        let (outsider_sk, _outsider_pk) = keypair_from_seed(222);
+        let outsider_derived = (outsider_sk * RISTRETTO_BASEPOINT_POINT).compress();
+
+        // The outsider claims to be at index 0, passing a self-consistent
+        // (secret_key, signer_pubkey_compressed) — init_signing should succeed
+        // because sk*G == outsider_derived.
+        let rng = ChaCha20Rng::from_seed([0x88; 32]);
+        let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
+
+        signer.init_validation(ring.len(), ring_hash).unwrap();
+        for i in 0..ring.len() {
+            signer.validate_member(i, &compressed[i]).unwrap();
+        }
+
+        // init_signing passes: sk*G matches the supplied compressed pubkey.
+        signer
+            .init_signing(0, outsider_sk, &outsider_derived, b"test")
+            .unwrap();
+
+        // Phase 2: when sign_member delivers the REAL ring member at index 0
+        // (which differs from the outsider's pubkey), IdentityMismatch fires.
+        // The signer is at index 0 with ring_len=2, so Phase 2 wraps:
+        // processing order is (pi+1)%N = 1, then pi = 0.
+        // First member (index 1) is a non-signer step — should succeed.
+        let step1 = signer.sign_member(1, &compressed[1]);
+        assert!(step1.is_ok());
+
+        // Second member (index 0 = signer slot) — must detect mismatch.
+        let err = signer.sign_member(0, &compressed[0]).unwrap_err();
+        assert_eq!(err, StreamingError::IdentityMismatch);
     }
 }
