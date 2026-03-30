@@ -139,8 +139,9 @@ impl Drop for SecretScalar {
 ///
 /// Using 512 bits (the full SHA3-512 output) provides GBP resistance of
 /// `2^{512 / (1 + ⌊log₂ k⌋)}` where k is the number of attacker-controlled
-/// positions — ≥ 2^128 for rings up to 16 members, ≥ 2^73 for rings
-/// up to 64 members.
+/// positions — ≥ 2^128 for rings up to 8 members (k=8 → 2^128),
+/// ≥ 2^102 for rings up to 16 members (k=16 → 2^102.4),
+/// ≥ 2^73 for rings up to 64 members (k=64 → 2^73.1).
 ///
 /// [`RingHash`]: crate::ring::RingHash
 #[derive(Clone, Copy, PartialEq, Eq)]
