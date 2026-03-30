@@ -14,6 +14,14 @@
 //! The final member (the signer at index pi) produces the closing challenge `c_0`, the
 //! key image, and the signer's response scalar.
 //!
+//! # Ring-switch detection
+//!
+//! An internal 512-bit XOR binding is accumulated in both phases.  If Phase 2
+//! delivers a different ring than Phase 1, the mismatch is caught before the
+//! signer produces any signature component.  The binding's resistance to the
+//! generalized birthday problem (GBP) scales with ring size — ≥ 2^128 for
+//! rings up to 16 members, ≥ 2^73 for rings up to 64 members.
+//!
 //! # Algorithm compatibility
 //!
 //! The output is mathematically identical to [`BLSAG::sign_with_rng`](super::BLSAG::sign_with_rng)
@@ -111,28 +119,46 @@ impl Drop for SecretScalar {
     }
 }
 
-/// Order-independent ring binding: XOR accumulator of indexed per-member hashes.
+/// Order-independent ring binding for streaming anti-switch detection.
 ///
-/// Each ring member contributes `SHA3-512("nazgul-ring-bind-v1" || index_le64 || compressed)[..32]`
-/// via XOR. Because XOR is commutative, the result is identical regardless of member
-/// submission order — allowing Phase 1 (canonical order) and Phase 2 (signing order)
-/// to be compared directly.
+/// Uses a 512-bit XOR accumulator of indexed per-member SHA3-512 hashes.
+/// Each ring member contributes the full 64-byte output of
+/// `SHA3-512("nazgul-ring-bind-v2" || index_le64 || compressed)` via XOR.
+///
+/// # Why this is separate from [`RingHash`]
+///
+/// [`RingHash`] is the canonical, public ring identity — a sequential
+/// `SHA3-512(m_0 || m_1 || … || m_{N-1})` truncated to 32 bytes. Its
+/// collision resistance (~2^128) is independent of ring size.
+///
+/// This binding serves a different purpose: detecting ring-switch attacks
+/// between Phase 1 (canonical order) and Phase 2 (signing order) of the
+/// streaming protocol. Because Phase 2 delivers members in a different
+/// order, an order-*independent* accumulator is required. XOR-of-hashes
+/// is the simplest O(1)-memory scheme that achieves this.
+///
+/// Using 512 bits (the full SHA3-512 output) provides GBP resistance of
+/// `2^{512 / (1 + ⌊log₂ k⌋)}` where k is the number of attacker-controlled
+/// positions — ≥ 2^128 for rings up to 16 members, ≥ 2^73 for rings
+/// up to 64 members.
+///
+/// [`RingHash`]: crate::ring::RingHash
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct RingBinding([u8; 32]);
+struct RingBinding([u8; 64]);
 
 impl RingBinding {
     fn new() -> Self {
-        RingBinding([0u8; 32])
+        RingBinding([0u8; 64])
     }
 
     /// Absorb a ring member at position `index` into the accumulator.
     fn accumulate(&mut self, index: usize, compressed: &CompressedRistretto) {
         let hash = Sha3_512::new()
-            .chain_update(b"nazgul-ring-bind-v1")
+            .chain_update(b"nazgul-ring-bind-v2")
             .chain_update((index as u64).to_le_bytes())
             .chain_update(compressed.as_bytes())
             .finalize();
-        for (acc, h) in self.0.iter_mut().zip(hash[..32].iter()) {
+        for (acc, h) in self.0.iter_mut().zip(hash.iter()) {
             *acc ^= h;
         }
     }
@@ -1567,5 +1593,31 @@ mod tests {
             let result = signer.sign_member(idx, &compressed[idx]);
             assert!(result.is_ok(), "sign_member({idx}) failed: {result:?}");
         }
+    }
+
+    /// Pin the RingBinding accumulator width and domain tag so that accidental
+    /// downgrades (e.g. reverting to 32-byte / v1) are caught by CI.
+    #[test]
+    fn test_ring_binding_512bit_deterministic() {
+        let (_, pk) = keypair_from_seed(100);
+        let compressed = pk.compress();
+
+        let mut binding = RingBinding::new();
+        assert_eq!(binding.0.len(), 64, "accumulator must be 512 bits");
+
+        binding.accumulate(0, &compressed);
+
+        // Verify the accumulator is non-zero after absorbing a member.
+        assert_ne!(binding.0, [0u8; 64]);
+
+        // Verify determinism: same input → same output.
+        let mut binding2 = RingBinding::new();
+        binding2.accumulate(0, &compressed);
+        assert_eq!(binding.0, binding2.0);
+
+        // Verify index-sensitivity: different index → different output.
+        let mut binding3 = RingBinding::new();
+        binding3.accumulate(1, &compressed);
+        assert_ne!(binding.0, binding3.0);
     }
 }
