@@ -17,6 +17,9 @@ pub enum SignatureError {
     DecompressionFailed,
     /// The ring is in compressed state and must be decompressed before use.
     CompressedRing,
+    /// The streaming protocol encountered an error (e.g., ring-switch detected,
+    /// out-of-order member, or invalid state transition).
+    StreamingProtocol,
 }
 
 impl core::fmt::Display for SignatureError {
@@ -42,6 +45,9 @@ impl core::fmt::Display for SignatureError {
                     f,
                     "Ring is in compressed state; call decompress() before signing or verifying"
                 )
+            }
+            SignatureError::StreamingProtocol => {
+                write!(f, "Streaming protocol error (ring-switch, ordering, or state)")
             }
         }
     }

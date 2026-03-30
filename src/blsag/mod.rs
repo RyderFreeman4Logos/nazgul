@@ -61,6 +61,7 @@ mod precompute;
 mod sign;
 mod strategy;
 pub mod streaming;
+mod streaming_wrappers;
 mod verify;
 
 pub use contextual::ContextualBLSAG;

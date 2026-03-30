@@ -375,7 +375,12 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         // Verify the secret key corresponds to the claimed signer public key.
         // This mirrors the SignerNotFound check in the one-shot BLSAG::sign.
         let derived_pubkey = (secret_key * constants::RISTRETTO_BASEPOINT_POINT).compress();
-        if derived_pubkey.as_bytes().ct_eq(signer_pubkey_compressed.as_bytes()).unwrap_u8() == 0 {
+        if derived_pubkey
+            .as_bytes()
+            .ct_eq(signer_pubkey_compressed.as_bytes())
+            .unwrap_u8()
+            == 0
+        {
             return Err(StreamingError::IdentityMismatch);
         }
 
@@ -1585,7 +1590,12 @@ mod tests {
         // Phase 2: sign with the same ring.
         let signer_index = 0;
         signer
-            .init_signing(signer_index, signer_sk, &signer_pk.compress(), b"honest test")
+            .init_signing(
+                signer_index,
+                signer_sk,
+                &signer_pk.compress(),
+                b"honest test",
+            )
             .unwrap();
 
         // Signing order: 1, 2, 0
