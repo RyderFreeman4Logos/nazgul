@@ -139,8 +139,9 @@ impl Drop for SecretScalar {
 ///
 /// Using 512 bits (the full SHA3-512 output) provides GBP resistance of
 /// `2^{512 / (1 + ⌊log₂ k⌋)}` where k is the number of attacker-controlled
-/// positions — ≥ 2^128 for rings up to 16 members, ≥ 2^73 for rings
-/// up to 64 members.
+/// positions — ≥ 2^128 for rings up to 8 members (k=8 → 2^128),
+/// ≥ 2^102 for rings up to 16 members (k=16 → 2^102.4),
+/// ≥ 2^73 for rings up to 64 members (k=64 → 2^73.1).
 ///
 /// [`RingHash`]: crate::ring::RingHash
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -374,7 +375,12 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         // Verify the secret key corresponds to the claimed signer public key.
         // This mirrors the SignerNotFound check in the one-shot BLSAG::sign.
         let derived_pubkey = (secret_key * constants::RISTRETTO_BASEPOINT_POINT).compress();
-        if derived_pubkey.as_bytes().ct_eq(signer_pubkey_compressed.as_bytes()).unwrap_u8() == 0 {
+        if derived_pubkey
+            .as_bytes()
+            .ct_eq(signer_pubkey_compressed.as_bytes())
+            .unwrap_u8()
+            == 0
+        {
             return Err(StreamingError::IdentityMismatch);
         }
 
@@ -1584,7 +1590,12 @@ mod tests {
         // Phase 2: sign with the same ring.
         let signer_index = 0;
         signer
-            .init_signing(signer_index, signer_sk, &signer_pk.compress(), b"honest test")
+            .init_signing(
+                signer_index,
+                signer_sk,
+                &signer_pk.compress(),
+                b"honest test",
+            )
             .unwrap();
 
         // Signing order: 1, 2, 0

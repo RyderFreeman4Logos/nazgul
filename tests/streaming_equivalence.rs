@@ -159,3 +159,89 @@ fn test_streaming_math_equivalence_10() {
 fn test_streaming_math_equivalence_100() {
     assert_streaming_math_equivalence(100);
 }
+
+// ---------------------------------------------------------------------------
+// Convenience wrapper equivalence tests
+// ---------------------------------------------------------------------------
+
+/// Verify that `BLSAG::sign_streaming_with_rng` produces a valid signature
+/// and that `BLSAG::verify_streaming` accepts it.
+fn assert_convenience_wrapper_equivalence(ring_size: usize) {
+    let keypairs: Vec<_> = (0..ring_size)
+        .map(|i| keypair_from_seed(i as u8 + 1))
+        .collect();
+    let (secret_key, _) = keypairs[0];
+
+    let public_keys: Vec<_> = keypairs.iter().map(|(_, pk)| *pk).collect();
+    let ring = Ring::new(public_keys);
+
+    let message = b"convenience wrapper equivalence test";
+
+    // --- Path A: Standard one-shot sign + verify ---
+    let mut rng_standard = ChaCha20Rng::from_seed([0xCC; 32]);
+    let standard_sig =
+        BLSAG::sign_with_rng::<Sha3_512, _>(secret_key, &ring, None, message, &mut rng_standard)
+            .expect("standard sign");
+    assert!(
+        BLSAG::verify::<Sha3_512>(&standard_sig, &ring, None, message),
+        "standard verify (ring_size={ring_size})"
+    );
+
+    // --- Path B: Streaming convenience sign + verify ---
+    let rng_streaming = ChaCha20Rng::from_seed([0xDD; 32]);
+    let streaming_sig =
+        BLSAG::sign_streaming_with_rng::<Sha3_512, _>(secret_key, &ring, message, rng_streaming)
+            .expect("streaming convenience sign");
+
+    // Streaming signature verifies with both standard and streaming verifiers.
+    assert!(
+        BLSAG::verify::<Sha3_512>(&streaming_sig, &ring, None, message),
+        "streaming sig → standard verify (ring_size={ring_size})"
+    );
+    assert!(
+        BLSAG::verify_streaming::<Sha3_512>(&streaming_sig, &ring, message),
+        "streaming sig → streaming verify (ring_size={ring_size})"
+    );
+
+    // Standard signature verifies with streaming verifier.
+    assert!(
+        BLSAG::verify_streaming::<Sha3_512>(&standard_sig, &ring, message),
+        "standard sig → streaming verify (ring_size={ring_size})"
+    );
+
+    // Key images must match (same secret key → same key image).
+    assert_eq!(
+        standard_sig.key_image().compress(),
+        streaming_sig.key_image().compress(),
+        "key images must match (ring_size={ring_size})"
+    );
+
+    // Wrong message must fail both verifiers.
+    let wrong = b"wrong message";
+    assert!(!BLSAG::verify::<Sha3_512>(
+        &streaming_sig,
+        &ring,
+        None,
+        wrong
+    ));
+    assert!(!BLSAG::verify_streaming::<Sha3_512>(
+        &streaming_sig,
+        &ring,
+        wrong
+    ));
+}
+
+#[test]
+fn test_convenience_wrapper_equivalence_1() {
+    assert_convenience_wrapper_equivalence(1);
+}
+
+#[test]
+fn test_convenience_wrapper_equivalence_10() {
+    assert_convenience_wrapper_equivalence(10);
+}
+
+#[test]
+fn test_convenience_wrapper_equivalence_100() {
+    assert_convenience_wrapper_equivalence(100);
+}
