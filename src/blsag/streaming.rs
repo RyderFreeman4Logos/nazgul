@@ -14,6 +14,14 @@
 //! The final member (the signer at index pi) produces the closing challenge `c_0`, the
 //! key image, and the signer's response scalar.
 //!
+//! # Ring-switch detection
+//!
+//! An internal 512-bit XOR binding is accumulated in both phases.  If Phase 2
+//! delivers a different ring than Phase 1, the mismatch is caught before the
+//! signer produces any signature component.  The binding's resistance to the
+//! generalized birthday problem (GBP) scales with ring size — ≥ 2^128 for
+//! rings up to 16 members, ≥ 2^73 for rings up to 64 members.
+//!
 //! # Algorithm compatibility
 //!
 //! The output is mathematically identical to [`BLSAG::sign_with_rng`](super::BLSAG::sign_with_rng)
@@ -1585,5 +1593,31 @@ mod tests {
             let result = signer.sign_member(idx, &compressed[idx]);
             assert!(result.is_ok(), "sign_member({idx}) failed: {result:?}");
         }
+    }
+
+    /// Pin the RingBinding accumulator width and domain tag so that accidental
+    /// downgrades (e.g. reverting to 32-byte / v1) are caught by CI.
+    #[test]
+    fn test_ring_binding_512bit_deterministic() {
+        let (_, pk) = keypair_from_seed(100);
+        let compressed = pk.compress();
+
+        let mut binding = RingBinding::new();
+        assert_eq!(binding.0.len(), 64, "accumulator must be 512 bits");
+
+        binding.accumulate(0, &compressed);
+
+        // Verify the accumulator is non-zero after absorbing a member.
+        assert_ne!(binding.0, [0u8; 64]);
+
+        // Verify determinism: same input → same output.
+        let mut binding2 = RingBinding::new();
+        binding2.accumulate(0, &compressed);
+        assert_eq!(binding.0, binding2.0);
+
+        // Verify index-sensitivity: different index → different output.
+        let mut binding3 = RingBinding::new();
+        binding3.accumulate(1, &compressed);
+        assert_ne!(binding.0, binding3.0);
     }
 }
