@@ -120,6 +120,13 @@ fn test_scalar_roundtrip_no_std() {
     let point_bytes = original_point.to_bytes();
     let point_roundtrip = RistrettoPoint::from_bytes(&point_bytes).unwrap();
     assert_eq!(original_point, point_roundtrip);
+
+    let point_base58 = original_point.to_base58();
+    let point_base58_roundtrip = RistrettoPoint::from_base58(point_base58).unwrap();
+    assert_eq!(original_point, point_base58_roundtrip);
+
+    assert!(Scalar::from_bytes(&[0u8; 31]).is_err());
+    assert!(RistrettoPoint::from_bytes(&[255u8; 32]).is_err());
 }
 
 #[test]
@@ -129,11 +136,13 @@ fn test_keypair_roundtrip_no_std() {
 
     let bytes = original_keypair.to_bytes();
     let from_bytes = KeyPair::from_bytes(&bytes).unwrap();
-    assert_eq!(original_keypair.public(), from_bytes.public());
+    assert_eq!(original_keypair.to_bytes(), from_bytes.to_bytes());
 
     let base58 = original_keypair.to_base58();
     let from_base58 = KeyPair::from_base58(base58).unwrap();
-    assert_eq!(original_keypair.public(), from_base58.public());
+    assert_eq!(original_keypair.to_bytes(), from_base58.to_bytes());
+
+    assert!(KeyPair::from_bytes(&[0u8; 31]).is_err());
 }
 
 #[test]
