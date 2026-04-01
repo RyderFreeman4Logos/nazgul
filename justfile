@@ -1,4 +1,5 @@
 cargo_home := "$(git rev-parse --show-toplevel)/.cargo-local"
+thumb_target := "thumbv8m.main-none-eabihf"
 
 
 # Default recipe
@@ -20,7 +21,7 @@ test-serde:
 
 # Run no_std tests
 test-no-std:
-    CARGO_HOME={{cargo_home}} cargo test --no-default-features --features no_std --verbose
+    CARGO_HOME={{cargo_home}} cargo check --no-default-features --features no_std --target {{thumb_target}} --verbose
 
 # Check formatting
 check-fmt:
@@ -36,7 +37,7 @@ clippy-default:
 
 # Run clippy on no_std
 clippy-no-std:
-    CARGO_HOME={{cargo_home}} cargo clippy --no-default-features --features no_std -- -D warnings
+    CARGO_HOME={{cargo_home}} cargo clippy --no-default-features --features no_std --target {{thumb_target}} -- -D warnings
 
 # Run clippy on serde
 clippy-serde:
