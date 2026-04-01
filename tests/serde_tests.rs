@@ -1,5 +1,7 @@
 #![cfg(feature = "serde-derive")]
 
+#[cfg(feature = "blake3")]
+use nazgul::blake3_compat::Blake3_512;
 use nazgul::blsag::{ContextualBLSAG, BLSAG};
 use nazgul::clsag::CLSAG;
 use nazgul::keypair::KeyPair;
@@ -205,7 +207,7 @@ fn contextual_blsag_archival_verify_after_serde_roundtrip() {
     let deserialized: ContextualBLSAG = serde_json::from_str(&json).unwrap();
 
     // Confirm the internal ring is now in Compressed state
-    match &deserialized.context {
+    match deserialized.context_ref() {
         RingContext::Archival(r) => assert!(
             !r.is_decompressed(),
             "Internal ring should be Compressed after serde roundtrip"
@@ -256,5 +258,77 @@ fn contextual_blsag_compact_verify_after_serde_roundtrip() {
     assert!(
         deserialized_sig.verify::<Sha512>(Some(&deserialized_ring), None, message),
         "Compact verify must auto-decompress external ring after serde roundtrip"
+    );
+    assert_eq!(
+        deserialized_sig.context().selected_compact_hash(),
+        Some(ring.canonical_hash_with::<Sha512>()),
+        "Compact serde roundtrip must preserve the suite-specific context hash"
+    );
+}
+
+#[test]
+fn contextual_blsag_compact_legacy_payload_without_selected_hash_still_verifies() {
+    let mut csprng = OsRng;
+    let signer = KeyPair::generate(&mut csprng);
+    let mut public_keys: Vec<RistrettoPoint> = (0..4)
+        .map(|_| *KeyPair::generate(&mut csprng).public())
+        .collect();
+    public_keys.push(*signer.public());
+    let ring = Ring::new(public_keys);
+    let message = b"Compact legacy payload fallback";
+
+    let sig = ContextualBLSAG::sign_compact::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
+
+    let sig_json = serde_json::to_value(&sig).unwrap();
+    let mut sig_object = sig_json.as_object().unwrap().clone();
+    sig_object.remove("compact_selected_hash");
+    let legacy_sig: ContextualBLSAG = serde_json::from_value(sig_object.into()).unwrap();
+
+    assert!(
+        legacy_sig.verify::<Sha512>(Some(&ring), None, message),
+        "Legacy compact payloads without suite metadata must remain verifiable"
+    );
+    assert_eq!(
+        legacy_sig.context().selected_compact_hash(),
+        None,
+        "Legacy payloads should deserialize without synthetic suite metadata"
+    );
+}
+
+#[cfg(feature = "blake3")]
+#[test]
+fn contextual_blsag_compact_blake3_verify_after_serde_roundtrip() {
+    let mut csprng = OsRng;
+    let signer = KeyPair::generate(&mut csprng);
+    let mut public_keys: Vec<RistrettoPoint> = (0..4)
+        .map(|_| *KeyPair::generate(&mut csprng).public())
+        .collect();
+    public_keys.push(*signer.public());
+    let ring = Ring::new(public_keys);
+    let message = b"Compact Blake3 serde roundtrip";
+
+    let sig = ContextualBLSAG::sign_compact::<Blake3_512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
+
+    let sig_json = serde_json::to_string(&sig).unwrap();
+    let deserialized_sig: ContextualBLSAG = serde_json::from_str(&sig_json).unwrap();
+
+    assert!(deserialized_sig.verify::<Blake3_512>(Some(&ring), None, message));
+    assert_eq!(
+        deserialized_sig
+            .context()
+            .canonical_hash_with::<Blake3_512>(),
+        ring.canonical_hash_with::<Blake3_512>()
     );
 }

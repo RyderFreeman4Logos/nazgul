@@ -34,7 +34,6 @@ use curve25519_dalek::scalar::Scalar;
 use digest::generic_array::typenum::U64;
 use digest::Digest;
 use rand_core::{CryptoRng, RngCore};
-use sha3::Sha3_512;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
@@ -121,15 +120,16 @@ impl Drop for SecretScalar {
 
 /// Order-independent ring binding for streaming anti-switch detection.
 ///
-/// Uses a 512-bit XOR accumulator of indexed per-member SHA3-512 hashes.
-/// Each ring member contributes the full 64-byte output of
-/// `SHA3-512("nazgul-ring-bind-v2" || index_le64 || compressed)` via XOR.
+/// Uses a 512-bit XOR accumulator of indexed per-member digest outputs. Each
+/// ring member contributes the full 64-byte output of
+/// `H("nazgul-ring-bind-v2" || index_le64 || compressed)` via XOR, where `H`
+/// is the same digest suite used by the enclosing signer.
 ///
 /// # Why this is separate from [`RingHash`]
 ///
 /// [`RingHash`] is the canonical, public ring identity — a sequential
-/// `SHA3-512(m_0 || m_1 || … || m_{N-1})` truncated to 32 bytes. Its
-/// collision resistance (~2^128) is independent of ring size.
+/// `H(m_0 || m_1 || … || m_{N-1})` truncated to 32 bytes under the caller's
+/// selected digest suite.
 ///
 /// This binding serves a different purpose: detecting ring-switch attacks
 /// between Phase 1 (canonical order) and Phase 2 (signing order) of the
@@ -137,7 +137,7 @@ impl Drop for SecretScalar {
 /// order, an order-*independent* accumulator is required. XOR-of-hashes
 /// is the simplest O(1)-memory scheme that achieves this.
 ///
-/// Using 512 bits (the full SHA3-512 output) provides GBP resistance of
+/// Using the full 512-bit digest output provides GBP resistance of
 /// `2^{512 / (1 + ⌊log₂ k⌋)}` where k is the number of attacker-controlled
 /// positions — ≥ 2^128 for rings up to 8 members (k=8 → 2^128),
 /// ≥ 2^102 for rings up to 16 members (k=16 → 2^102.4),
@@ -153,8 +153,12 @@ impl RingBinding {
     }
 
     /// Absorb a ring member at position `index` into the accumulator.
-    fn accumulate(&mut self, index: usize, compressed: &CompressedRistretto) {
-        let hash = Sha3_512::new()
+    fn accumulate<H: Digest<OutputSize = U64> + Clone + Default>(
+        &mut self,
+        index: usize,
+        compressed: &CompressedRistretto,
+    ) {
+        let hash = H::default()
             .chain_update(b"nazgul-ring-bind-v2")
             .chain_update((index as u64).to_le_bytes())
             .chain_update(compressed.as_bytes())
@@ -170,10 +174,10 @@ impl RingBinding {
 // ---------------------------------------------------------------------------
 
 /// Validation-phase state: accumulates ring hash from members in order 0..N-1.
-struct Validating {
+struct Validating<H: Digest<OutputSize = U64> + Clone + Default> {
     ring_len: usize,
     expected_ring_hash: RingHash,
-    hasher: Sha3_512,
+    hasher: H,
     members_seen: usize,
     /// Order-independent accumulator binding Phase 1 ring to Phase 2.
     ring_binding: RingBinding,
@@ -212,11 +216,11 @@ struct Signing<H: Digest<OutputSize = U64> + Clone + Default> {
     ring_binding: RingBinding,
 }
 
-enum State<H: Digest<OutputSize = U64> + Clone + Default> {
+enum Phase {
     Idle,
-    Validating(Validating),
-    Validated(Validated),
-    Signing(Signing<H>),
+    Validating,
+    Validated,
+    Signing,
     Done,
     /// Poisoned state after an error or move.
     Poisoned,
@@ -231,7 +235,10 @@ pub struct StreamingBlsagSigner<
     H: Digest<OutputSize = U64> + Clone + Default,
     R: CryptoRng + RngCore,
 > {
-    state: State<H>,
+    phase: Phase,
+    validating: Option<Validating<H>>,
+    validated: Option<Validated>,
+    signing: Option<Signing<H>>,
     rng: R,
 }
 
@@ -241,7 +248,10 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
     /// Creates a new streaming signer in the Idle state.
     pub fn new(rng: R) -> Self {
         Self {
-            state: State::Idle,
+            phase: Phase::Idle,
+            validating: None,
+            validated: None,
+            signing: None,
             rng,
         }
     }
@@ -256,20 +266,21 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         ring_len: usize,
         expected_ring_hash: RingHash,
     ) -> Result<(), StreamingError> {
-        if !matches!(self.state, State::Idle) {
+        if !matches!(self.phase, Phase::Idle) {
             return Err(StreamingError::InvalidState);
         }
         if ring_len == 0 {
             return Err(StreamingError::EmptyRing);
         }
 
-        self.state = State::Validating(Validating {
+        self.validating = Some(Validating {
             ring_len,
             expected_ring_hash,
-            hasher: Sha3_512::default(),
+            hasher: H::default(),
             members_seen: 0,
             ring_binding: RingBinding::new(),
         });
+        self.phase = Phase::Validating;
 
         Ok(())
     }
@@ -283,10 +294,13 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         index: usize,
         compressed: &CompressedRistretto,
     ) -> Result<StepOutput, StreamingError> {
-        let validating = match &mut self.state {
-            State::Validating(v) => v,
-            _ => return Err(StreamingError::InvalidState),
-        };
+        if !matches!(self.phase, Phase::Validating) {
+            return Err(StreamingError::InvalidState);
+        }
+        let validating = self
+            .validating
+            .as_mut()
+            .ok_or(StreamingError::InvalidState)?;
 
         // Enforce sequential order.
         if index != validating.members_seen {
@@ -304,23 +318,18 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             return Err(StreamingError::InvalidPoint);
         }
 
-        // Feed compressed bytes into the running ring hash (SHA3-512, same as Ring::canonical_hash).
+        // Feed compressed bytes into the running ring hash using the same
+        // digest `H` as `Ring::canonical_hash_with::<H>()`.
         validating.hasher.update(compressed.as_bytes());
 
         // Accumulate into order-independent ring binding (Phase 1→Phase 2 anti-switch).
-        validating.ring_binding.accumulate(index, compressed);
+        validating.ring_binding.accumulate::<H>(index, compressed);
 
         validating.members_seen += 1;
 
         // Check if validation is complete.
         if validating.members_seen == validating.ring_len {
-            // Finalize the ring hash.
-            // We need to take ownership of the validating state to finalize the hasher.
-            let old_state = core::mem::replace(&mut self.state, State::Poisoned);
-            let validating = match old_state {
-                State::Validating(v) => v,
-                _ => unreachable!(),
-            };
+            let validating = self.validating.take().ok_or(StreamingError::InvalidState)?;
 
             let output = validating.hasher.finalize();
             let mut hash_bytes = [0u8; 32];
@@ -328,14 +337,15 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             let computed_hash = RingHash(hash_bytes);
 
             if computed_hash != validating.expected_ring_hash {
-                self.state = State::Idle;
+                self.phase = Phase::Idle;
                 return Err(StreamingError::RingHashMismatch);
             }
 
-            self.state = State::Validated(Validated {
+            self.validated = Some(Validated {
                 ring_len: validating.ring_len,
                 ring_binding: validating.ring_binding,
             });
+            self.phase = Phase::Validated;
         }
 
         Ok(StepOutput::Ack)
@@ -357,17 +367,19 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         signer_pubkey_compressed: &CompressedRistretto,
         message: &[u8],
     ) -> Result<(), StreamingError> {
-        let validated = match &self.state {
-            State::Validated(v) => v,
-            State::Idle | State::Validating(_) => {
-                return Err(StreamingError::ValidationNotComplete)
-            }
-            _ => return Err(StreamingError::InvalidState),
-        };
+        if matches!(self.phase, Phase::Idle | Phase::Validating) {
+            return Err(StreamingError::ValidationNotComplete);
+        }
+        if !matches!(self.phase, Phase::Validated) {
+            return Err(StreamingError::InvalidState);
+        }
+        let validated = self.validated.take().ok_or(StreamingError::InvalidState)?;
 
         if signer_index >= validated.ring_len {
+            let expected = validated.ring_len.saturating_sub(1);
+            self.validated = Some(validated);
             return Err(StreamingError::OutOfOrder {
-                expected: validated.ring_len.saturating_sub(1),
+                expected,
                 got: signer_index,
             });
         }
@@ -381,16 +393,21 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             .unwrap_u8()
             == 0
         {
+            self.validated = Some(validated);
             return Err(StreamingError::IdentityMismatch);
         }
 
+        // Decompress the signer's public key for Hp computation.
+        let signer_pubkey = match signer_pubkey_compressed.decompress() {
+            Some(point) => point,
+            None => {
+                self.validated = Some(validated);
+                return Err(StreamingError::InvalidPoint);
+            }
+        };
+
         let ring_len = validated.ring_len;
         let expected_ring_binding = validated.ring_binding;
-
-        // Decompress the signer's public key for Hp computation.
-        let signer_pubkey = signer_pubkey_compressed
-            .decompress()
-            .ok_or(StreamingError::InvalidPoint)?;
 
         let k = SecretScalar(secret_key);
 
@@ -427,7 +444,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             Scalar::ZERO
         };
 
-        self.state = State::Signing(Signing {
+        self.signing = Some(Signing {
             ring_len,
             signer_index,
             message_hash,
@@ -441,6 +458,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             expected_ring_binding,
             ring_binding: RingBinding::new(),
         });
+        self.phase = Phase::Signing;
 
         Ok(())
     }
@@ -457,11 +475,11 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         index: usize,
         compressed: &CompressedRistretto,
     ) -> Result<StepOutput, StreamingError> {
-        // We need mutable access to the signing state.
-        let signing = match &mut self.state {
-            State::Signing(s) => s,
-            _ => return Err(StreamingError::InvalidState),
-        };
+        if !matches!(self.phase, Phase::Signing) {
+            return Err(StreamingError::InvalidState);
+        }
+
+        let mut signing = self.signing.take().ok_or(StreamingError::InvalidState)?;
 
         let ring_len = signing.ring_len;
         let signer_index = signing.signer_index;
@@ -470,6 +488,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         // Expected index in the signing order: (pi+1+step) % N
         let expected_index = (signer_index + 1 + signing.sign_step) % ring_len;
         if index != expected_index {
+            self.signing = Some(signing);
             return Err(StreamingError::OutOfOrder {
                 expected: expected_index,
                 got: index,
@@ -477,12 +496,16 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         }
 
         // Validate the point.
-        let point = compressed
-            .decompress()
-            .ok_or(StreamingError::InvalidPoint)?;
+        let point = match compressed.decompress() {
+            Some(point) => point,
+            None => {
+                self.signing = Some(signing);
+                return Err(StreamingError::InvalidPoint);
+            }
+        };
 
         // Accumulate into Phase 2 ring binding (order-independent).
-        signing.ring_binding.accumulate(index, compressed);
+        signing.ring_binding.accumulate::<H>(index, compressed);
 
         let is_signer_step = signing.sign_step == total_steps - 1;
 
@@ -490,7 +513,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             // Verify Phase 2 ring matches Phase 1 validated ring (anti-switch).
             // All N members have now been accumulated — compare the XOR accumulators.
             if signing.ring_binding != signing.expected_ring_binding {
-                self.state = State::Poisoned;
+                self.phase = Phase::Poisoned;
                 return Err(StreamingError::RingSwitchDetected);
             }
 
@@ -504,7 +527,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
                 .unwrap_u8()
                 == 0
             {
-                self.state = State::Poisoned;
+                self.phase = Phase::Poisoned;
                 return Err(StreamingError::IdentityMismatch);
             }
 
@@ -516,7 +539,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             let key_image = signing.key_image;
 
             // Transition to Done.
-            self.state = State::Done;
+            self.phase = Phase::Done;
 
             Ok(StepOutput::Complete {
                 c_0,
@@ -558,6 +581,8 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             if index == ring_len - 1 {
                 signing.c_0 = signing.c_current;
             }
+
+            self.signing = Some(signing);
 
             Ok(StepOutput::ScalarResponse { index, s_i })
         }
@@ -776,7 +801,7 @@ mod tests {
         // Build the ring (sorted).
         let public_keys: Vec<RistrettoPoint> = keypairs.iter().map(|(_, pk)| *pk).collect();
         let ring = Ring::new(public_keys);
-        let ring_hash = ring.canonical_hash();
+        let ring_hash = ring.canonical_hash_with::<Sha3_512>();
 
         // Find the signer's index in the sorted ring.
         let signer_pk: RistrettoPoint = secret_key * RISTRETTO_BASEPOINT_POINT;
@@ -798,9 +823,9 @@ mod tests {
             .expect("init_validation");
 
         let compressed_members = ring.compressed_members();
-        for i in 0..ring.len() {
+        for (i, compressed_member) in compressed_members.iter().enumerate() {
             let result = signer
-                .validate_member(i, &compressed_members[i])
+                .validate_member(i, compressed_member)
                 .expect("validate_member");
             assert!(matches!(result, StepOutput::Ack));
         }
@@ -880,7 +905,7 @@ mod tests {
             (0..3).map(|i| keypair_from_seed(i + 10)).collect();
         let public_keys: Vec<RistrettoPoint> = keypairs.iter().map(|(_, pk)| *pk).collect();
         let ring = Ring::new(public_keys);
-        let ring_hash = ring.canonical_hash();
+        let ring_hash = ring.canonical_hash_with::<Sha3_512>();
 
         signer.init_validation(3, ring_hash).unwrap();
 
@@ -918,7 +943,7 @@ mod tests {
 
         let (_, pk) = keypair_from_seed(42);
         let ring = Ring::new(vec![pk]);
-        let ring_hash = ring.canonical_hash();
+        let ring_hash = ring.canonical_hash_with::<Sha3_512>();
 
         signer.init_validation(1, ring_hash).unwrap();
 
@@ -966,7 +991,7 @@ mod tests {
             (0..3).map(|i| keypair_from_seed(i + 70)).collect();
         let public_keys: Vec<RistrettoPoint> = keypairs.iter().map(|(_, pk)| *pk).collect();
         let ring = Ring::new(public_keys);
-        let ring_hash = ring.canonical_hash();
+        let ring_hash = ring.canonical_hash_with::<Sha3_512>();
         let compressed = ring.compressed_members();
         let members = ring.members();
 
@@ -981,8 +1006,8 @@ mod tests {
         let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
 
         signer.init_validation(3, ring_hash).unwrap();
-        for i in 0..3 {
-            signer.validate_member(i, &compressed[i]).unwrap();
+        for (i, compressed_member) in compressed.iter().enumerate().take(3) {
+            signer.validate_member(i, compressed_member).unwrap();
         }
 
         signer
@@ -1019,7 +1044,7 @@ mod tests {
         // Set up a valid ring and complete validation, then pass an invalid point during signing.
         let (sk, pk) = keypair_from_seed(80);
         let ring = Ring::new(vec![pk, keypair_from_seed(81).1]);
-        let ring_hash = ring.canonical_hash();
+        let ring_hash = ring.canonical_hash_with::<Sha3_512>();
         let compressed = ring.compressed_members();
         let members = ring.members();
 
@@ -1033,8 +1058,8 @@ mod tests {
         let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
 
         signer.init_validation(2, ring_hash).unwrap();
-        for i in 0..2 {
-            signer.validate_member(i, &compressed[i]).unwrap();
+        for (i, compressed_member) in compressed.iter().enumerate().take(2) {
+            signer.validate_member(i, compressed_member).unwrap();
         }
 
         signer
@@ -1062,7 +1087,7 @@ mod tests {
 
         let public_keys: Vec<RistrettoPoint> = keypairs.iter().map(|(_, pk)| *pk).collect();
         let ring = Ring::new(public_keys);
-        let ring_hash = ring.canonical_hash();
+        let ring_hash = ring.canonical_hash_with::<Sha3_512>();
 
         let signer_pk = secret_key * RISTRETTO_BASEPOINT_POINT;
         let signer_index = ring
@@ -1082,9 +1107,9 @@ mod tests {
             .expect("init_validation");
 
         let compressed_members = ring.compressed_members();
-        for i in 0..ring.len() {
+        for (i, compressed_member) in compressed_members.iter().enumerate() {
             signer
-                .validate_member(i, &compressed_members[i])
+                .validate_member(i, compressed_member)
                 .expect("validate_member");
         }
 
@@ -1186,9 +1211,9 @@ mod tests {
             )
             .expect("init");
 
-        for i in 0..n {
+        for (i, compressed_member) in compressed_members.iter().enumerate() {
             let result = verifier
-                .verify_member(i, &compressed_members[i], signature.responses()[i])
+                .verify_member(i, compressed_member, signature.responses()[i])
                 .expect("verify_member");
 
             if i == n - 1 {
@@ -1224,9 +1249,9 @@ mod tests {
             .expect("init");
 
         let mut final_result = VerifyStepOutput::Ack;
-        for i in 0..n {
+        for (i, compressed_member) in compressed_members.iter().enumerate() {
             final_result = verifier
-                .verify_member(i, &compressed_members[i], signature.responses()[i])
+                .verify_member(i, compressed_member, signature.responses()[i])
                 .expect("verify_member");
         }
         assert_eq!(final_result, VerifyStepOutput::Complete { valid: false });
@@ -1258,7 +1283,7 @@ mod tests {
             .expect("init");
 
         let mut final_result = VerifyStepOutput::Ack;
-        for i in 0..n {
+        for (i, compressed_member) in compressed_members.iter().enumerate() {
             // Tamper with response at index 1.
             let s_i = if i == 1 {
                 signature.responses()[i] + Scalar::ONE
@@ -1266,7 +1291,7 @@ mod tests {
                 signature.responses()[i]
             };
             final_result = verifier
-                .verify_member(i, &compressed_members[i], s_i)
+                .verify_member(i, compressed_member, s_i)
                 .expect("verify_member");
         }
         assert_eq!(final_result, VerifyStepOutput::Complete { valid: false });
@@ -1383,7 +1408,7 @@ mod tests {
         // Ring size 1: signing immediately completes.
         let (sk, pk) = keypair_from_seed(90);
         let ring = Ring::new(vec![pk]);
-        let ring_hash = ring.canonical_hash();
+        let ring_hash = ring.canonical_hash_with::<Sha3_512>();
         let compressed = ring.compressed_members();
         let members = ring.members();
 
@@ -1418,7 +1443,7 @@ mod tests {
     fn test_correct_signer_identity_passes() {
         let (sk, pk) = keypair_from_seed(200);
         let ring = Ring::new(vec![pk, keypair_from_seed(201).1]);
-        let ring_hash = ring.canonical_hash();
+        let ring_hash = ring.canonical_hash_with::<Sha3_512>();
         let compressed = ring.compressed_members();
         let members = ring.members();
 
@@ -1432,8 +1457,8 @@ mod tests {
         let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
 
         signer.init_validation(ring.len(), ring_hash).unwrap();
-        for i in 0..ring.len() {
-            signer.validate_member(i, &compressed[i]).unwrap();
+        for (i, compressed_member) in compressed.iter().enumerate() {
+            signer.validate_member(i, compressed_member).unwrap();
         }
 
         // Correct secret key for the signer at signer_index — should succeed.
@@ -1446,7 +1471,7 @@ mod tests {
         let (sk, pk) = keypair_from_seed(210);
         let (wrong_sk, _wrong_pk) = keypair_from_seed(211);
         let ring = Ring::new(vec![pk, keypair_from_seed(212).1]);
-        let ring_hash = ring.canonical_hash();
+        let ring_hash = ring.canonical_hash_with::<Sha3_512>();
         let compressed = ring.compressed_members();
         let members = ring.members();
 
@@ -1460,8 +1485,8 @@ mod tests {
         let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
 
         signer.init_validation(ring.len(), ring_hash).unwrap();
-        for i in 0..ring.len() {
-            signer.validate_member(i, &compressed[i]).unwrap();
+        for (i, compressed_member) in compressed.iter().enumerate() {
+            signer.validate_member(i, compressed_member).unwrap();
         }
 
         // Wrong secret key does not match the pubkey at signer_index.
@@ -1480,7 +1505,7 @@ mod tests {
         let (_sk0, pk0) = keypair_from_seed(220);
         let (_sk1, pk1) = keypair_from_seed(221);
         let ring = Ring::new(vec![pk0, pk1]);
-        let ring_hash = ring.canonical_hash();
+        let ring_hash = ring.canonical_hash_with::<Sha3_512>();
         let compressed = ring.compressed_members();
 
         // Outsider: valid keypair that is NOT in the ring.
@@ -1494,8 +1519,8 @@ mod tests {
         let mut signer = StreamingBlsagSigner::<Sha3_512, _>::new(rng);
 
         signer.init_validation(ring.len(), ring_hash).unwrap();
-        for i in 0..ring.len() {
-            signer.validate_member(i, &compressed[i]).unwrap();
+        for (i, compressed_member) in compressed.iter().enumerate() {
+            signer.validate_member(i, compressed_member).unwrap();
         }
 
         // init_signing passes: sk*G matches the supplied compressed pubkey.
@@ -1525,7 +1550,7 @@ mod tests {
         let (signer_sk, signer_pk) = keypair_from_seed(200);
         let (_, decoy_a) = keypair_from_seed(201);
         let ring_a = Ring::new(vec![signer_pk, decoy_a]);
-        let ring_a_hash = ring_a.canonical_hash();
+        let ring_a_hash = ring_a.canonical_hash_with::<Sha3_512>();
         let compressed_a = ring_a.compressed_members();
 
         // Ring B: signer + decoy_b (different decoy, same signer at index 0)
@@ -1542,8 +1567,8 @@ mod tests {
 
         // Phase 1: validate ring A.
         signer.init_validation(ring_a.len(), ring_a_hash).unwrap();
-        for i in 0..ring_a.len() {
-            signer.validate_member(i, &compressed_a[i]).unwrap();
+        for (i, compressed_member) in compressed_a.iter().enumerate() {
+            signer.validate_member(i, compressed_member).unwrap();
         }
 
         // Phase 2: init signing with the real signer key (passes identity check).
@@ -1575,7 +1600,7 @@ mod tests {
         let (_, decoy1) = keypair_from_seed(231);
         let (_, decoy2) = keypair_from_seed(232);
         let ring = Ring::new(vec![signer_pk, decoy1, decoy2]);
-        let ring_hash = ring.canonical_hash();
+        let ring_hash = ring.canonical_hash_with::<Sha3_512>();
         let compressed = ring.compressed_members();
 
         let rng = ChaCha20Rng::from_seed([0xAA; 32]);
@@ -1583,8 +1608,8 @@ mod tests {
 
         // Phase 1: validate ring.
         signer.init_validation(ring.len(), ring_hash).unwrap();
-        for i in 0..ring.len() {
-            signer.validate_member(i, &compressed[i]).unwrap();
+        for (i, compressed_member) in compressed.iter().enumerate() {
+            signer.validate_member(i, compressed_member).unwrap();
         }
 
         // Phase 2: sign with the same ring.
@@ -1616,19 +1641,19 @@ mod tests {
         let mut binding = RingBinding::new();
         assert_eq!(binding.0.len(), 64, "accumulator must be 512 bits");
 
-        binding.accumulate(0, &compressed);
+        binding.accumulate::<Sha3_512>(0, &compressed);
 
         // Verify the accumulator is non-zero after absorbing a member.
         assert_ne!(binding.0, [0u8; 64]);
 
         // Verify determinism: same input → same output.
         let mut binding2 = RingBinding::new();
-        binding2.accumulate(0, &compressed);
+        binding2.accumulate::<Sha3_512>(0, &compressed);
         assert_eq!(binding.0, binding2.0);
 
         // Verify index-sensitivity: different index → different output.
         let mut binding3 = RingBinding::new();
-        binding3.accumulate(1, &compressed);
+        binding3.accumulate::<Sha3_512>(1, &compressed);
         assert_ne!(binding.0, binding3.0);
     }
 }

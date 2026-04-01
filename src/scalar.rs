@@ -115,7 +115,7 @@ impl LocalByteConvertible for Scalar {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod test {
     use super::*;
     use rand::rngs::OsRng;

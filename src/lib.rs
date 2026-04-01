@@ -29,6 +29,9 @@ extern crate alloc;
 #[macro_use]
 extern crate std;
 
+#[cfg(all(test, not(feature = "std")))]
+extern crate std;
+
 extern crate curve25519_dalek;
 extern crate digest;
 extern crate rand_core;
@@ -50,6 +53,9 @@ pub mod ring;
 pub mod sag;
 pub mod scalar;
 pub mod traits;
+
+#[cfg(all(test, feature = "no_std", not(feature = "std")))]
+mod no_std_tests;
 
 #[cfg(feature = "blake3")]
 pub mod blake3_compat;

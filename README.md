@@ -25,10 +25,12 @@ This library is `#![no_std]` by default so it is possible to compile this librar
 The library includes comprehensive test suites for all features:
 
 - Standard tests: `cargo test`
-- No-std tests: `cargo test --no-default-features --features no_std`
+- No-std compatibility check: `cargo check --no-default-features --features no_std --target thumbv8m.main-none-eabihf`
+- No-std consumer check: `cargo check --manifest-path tests/no_std_consumer/Cargo.toml --target thumbv8m.main-none-eabihf`
+- No-std behavior tests: `cargo test --no-default-features --features no_std --lib`
 - Serialization tests: `cargo test --features serde-derive`
 
-All tests are run automatically on pull requests and commits via GitHub Actions. The pre-commit hook also ensures all test suites pass before allowing commits.
+All tests and compatibility checks are run automatically on pull requests and commits via GitHub Actions. The pre-commit hook also ensures all test suites pass before allowing commits.
 
 # Documentation
 

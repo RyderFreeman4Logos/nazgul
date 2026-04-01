@@ -64,7 +64,7 @@ pub mod streaming;
 mod streaming_wrappers;
 mod verify;
 
-pub use contextual::ContextualBLSAG;
+pub use contextual::{ContextualBLSAG, ContextualBlsagParts};
 pub use precompute::SigningPrecomputation;
 pub use strategy::MemoryStrategy;
 pub use streaming::{

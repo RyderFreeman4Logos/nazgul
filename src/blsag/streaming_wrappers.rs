@@ -56,7 +56,7 @@ impl BLSAG {
     ) -> Result<BLSAG, SignatureError> {
         let compressed = ring.compressed_members();
         let n = ring.len();
-        let ring_hash = ring.canonical_hash();
+        let ring_hash = ring.canonical_hash_with::<H>();
 
         // Find the signer's index in the sorted ring.
         let signer_pk = (k * RISTRETTO_BASEPOINT_POINT).compress();

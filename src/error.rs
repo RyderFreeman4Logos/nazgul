@@ -47,7 +47,10 @@ impl core::fmt::Display for SignatureError {
                 )
             }
             SignatureError::StreamingProtocol => {
-                write!(f, "Streaming protocol error (ring-switch, ordering, or state)")
+                write!(
+                    f,
+                    "Streaming protocol error (ring-switch, ordering, or state)"
+                )
             }
         }
     }

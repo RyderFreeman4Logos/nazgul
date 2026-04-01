@@ -1,12 +1,13 @@
 use crate::prelude::*;
-use crate::ring::{PreparedRing, Ring, RingContext};
+use crate::ring::{PreparedRing, Ring, RingContext, RingHash};
 use crate::traits::VerifyRef;
+use core::ops::Deref;
 use curve25519_dalek::scalar::Scalar;
 use digest::generic_array::typenum::U64;
 use digest::Digest;
 use rand_core::{CryptoRng, RngCore};
 #[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::BLSAG;
 
@@ -19,28 +20,140 @@ use super::BLSAG;
 /// 2.  **Archival**: Stores the full ring definition alongside the signature. This creates
 ///     a self-contained proof that can be verified offline or cross-system without external dependencies.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct ContextualBLSAG {
     pub signature: BLSAG,
+    context: RingContext,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    compact_selected_hash: Option<RingHash>,
+}
+
+/// Public construction/deconstruction parts for [`ContextualBLSAG`].
+#[derive(Clone, Debug)]
+pub struct ContextualBlsagParts {
+    pub signature: BLSAG,
     pub context: RingContext,
+    pub compact_selected_hash: Option<RingHash>,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Deserialize)]
+struct ContextualBlsagSerde {
+    signature: BLSAG,
+    context: RingContext,
+    #[serde(default)]
+    compact_selected_hash: Option<RingHash>,
+}
+
+/// A view over a [`ContextualBLSAG`] ring context that preserves compact-mode
+/// hash-suite metadata when it is available.
+#[derive(Clone, Copy, Debug)]
+pub struct ContextualRingContext<'a> {
+    raw: &'a RingContext,
+    compact_selected_hash: Option<RingHash>,
+}
+
+impl<'a> ContextualRingContext<'a> {
+    /// Returns the backwards-compatible default lookup hash.
+    pub fn canonical_hash(&self) -> RingHash {
+        self.raw.canonical_hash()
+    }
+
+    /// Returns the canonical hash associated with this context using the
+    /// caller-chosen digest `H`.
+    ///
+    /// Compact contextual signatures keep the legacy lookup hash inside
+    /// [`RingContext`] for backwards compatibility and store the suite-aware
+    /// compact hash as side metadata. Prefer that metadata when it exists so
+    /// callers observe the correct hash for the selected digest suite.
+    pub fn canonical_hash_with<H: Digest<OutputSize = U64> + Clone + Default>(&self) -> RingHash {
+        self.compact_selected_hash
+            .unwrap_or_else(|| self.raw.canonical_hash_with::<H>())
+    }
+
+    /// Returns the compact-mode hash metadata for the selected digest suite, if present.
+    pub fn selected_compact_hash(&self) -> Option<RingHash> {
+        self.compact_selected_hash
+    }
+}
+
+impl<'a> Deref for ContextualRingContext<'a> {
+    type Target = RingContext;
+
+    fn deref(&self) -> &Self::Target {
+        self.raw
+    }
 }
 
 impl ContextualBLSAG {
+    fn normalized_compact_selected_hash(
+        context: &RingContext,
+        compact_selected_hash: Option<RingHash>,
+    ) -> Option<RingHash> {
+        match context {
+            RingContext::Compact(lookup_hash) => {
+                compact_selected_hash.filter(|selected_hash| selected_hash != lookup_hash)
+            }
+            RingContext::Archival(_) => None,
+        }
+    }
+
+    /// Constructs a contextual signature from explicit parts.
+    pub fn from_parts(parts: ContextualBlsagParts) -> Self {
+        let compact_selected_hash =
+            Self::normalized_compact_selected_hash(&parts.context, parts.compact_selected_hash);
+        Self {
+            signature: parts.signature,
+            context: parts.context,
+            compact_selected_hash,
+        }
+    }
+
+    /// Deconstructs this contextual signature into explicit parts.
+    pub fn into_parts(self) -> ContextualBlsagParts {
+        ContextualBlsagParts {
+            signature: self.signature,
+            context: self.context,
+            compact_selected_hash: self.compact_selected_hash,
+        }
+    }
+
     /// Returns a reference to the inner BLSAG signature.
     pub fn signature(&self) -> &BLSAG {
         &self.signature
     }
 
-    /// Returns a reference to the ring context.
-    pub fn context(&self) -> &RingContext {
+    /// Returns the raw stored ring context.
+    ///
+    /// Compact contextual signatures store the backwards-compatible lookup hash
+    /// here. Use [`context`](Self::context) when you need suite-aware hash
+    /// semantics for compact signatures.
+    pub fn context_ref(&self) -> &RingContext {
         &self.context
+    }
+
+    /// Returns a suite-aware view over the ring context.
+    pub fn context(&self) -> ContextualRingContext<'_> {
+        ContextualRingContext {
+            raw: &self.context,
+            compact_selected_hash: Self::normalized_compact_selected_hash(
+                &self.context,
+                self.compact_selected_hash,
+            ),
+        }
     }
 
     /// Signs a message in Compact mode using an externally provided RNG.
     ///
-    /// Stores only the Ring's canonical hash. Use this when you expect the verifier
-    /// to have access to the Ring definition. Accepts an external `rng` source for
-    /// embedded/hardware TRNG support.
+    /// Stores the Ring's default canonical lookup hash plus compact metadata
+    /// for the selected digest suite. Use this when you expect the verifier to
+    /// have access to the Ring definition. The BLSAG mathematics follow `H`
+    /// while the compact lookup key stays on the backwards-compatible default
+    /// digest. Accepts an external `rng` source for embedded/hardware TRNG
+    /// support.
     pub fn sign_compact_with_rng<
         H: Digest<OutputSize = U64> + Clone + Default,
         R: CryptoRng + RngCore,
@@ -52,9 +165,12 @@ impl ContextualBLSAG {
         rng: &mut R,
     ) -> Result<Self, SignatureError> {
         let signature = BLSAG::sign_with_rng::<H, R>(k, ring, precomputed_data, message, rng)?;
+        let canonical_hash = ring.canonical_hash();
+        let selected_hash = ring.canonical_hash_with::<H>();
         Ok(Self {
             signature,
-            context: RingContext::Compact(ring.canonical_hash()),
+            context: RingContext::Compact(canonical_hash),
+            compact_selected_hash: (selected_hash != canonical_hash).then_some(selected_hash),
         })
     }
 
@@ -94,6 +210,7 @@ impl ContextualBLSAG {
         Ok(Self {
             signature,
             context: RingContext::Archival(ring.clone()),
+            compact_selected_hash: None,
         })
     }
 
@@ -125,6 +242,7 @@ impl ContextualBLSAG {
         Self {
             signature,
             context: RingContext::Compact(ring.canonical_hash()),
+            compact_selected_hash: None,
         }
     }
 
@@ -148,6 +266,7 @@ impl ContextualBLSAG {
         Self {
             signature,
             context: RingContext::Archival(ring.clone()),
+            compact_selected_hash: None,
         }
     }
 
@@ -164,7 +283,8 @@ impl ContextualBLSAG {
     ///
     /// *   `external_ring`:
     ///     *   If `context` is `Compact`, this is **REQUIRED**. The verification will fail if `None`.
-    ///         The method checks if `external_ring.canonical_hash() == stored_hash` before verifying.
+    ///         The method checks if `external_ring.canonical_hash() == stored_hash`
+    ///         before verifying.
     ///     *   If `context` is `Archival`, this is **OPTIONAL**.
     ///         *   If provided, it checks if `external_ring` matches the stored ring.
     ///         *   It always uses the stored (internal) ring for the mathematical verification.
@@ -183,6 +303,11 @@ impl ContextualBLSAG {
 
                 if *stored_hash != ring.canonical_hash() {
                     return false;
+                }
+                if let Some(selected_hash) = self.compact_selected_hash {
+                    if selected_hash != ring.canonical_hash_with::<H>() {
+                        return false;
+                    }
                 }
 
                 // After deserialization the external ring may be in Compressed
@@ -203,7 +328,9 @@ impl ContextualBLSAG {
             }
             RingContext::Archival(internal_ring) => {
                 if let Some(external) = external_ring {
-                    if internal_ring.canonical_hash() != external.canonical_hash() {
+                    if internal_ring.canonical_hash_with::<H>()
+                        != external.canonical_hash_with::<H>()
+                    {
                         return false;
                     }
                 }
@@ -222,5 +349,17 @@ impl ContextualBLSAG {
                 }
             }
         }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for ContextualBLSAG {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = ContextualBlsagSerde::deserialize(deserializer)?;
+        Ok(Self::from_parts(ContextualBlsagParts {
+            signature: raw.signature,
+            context: raw.context,
+            compact_selected_hash: raw.compact_selected_hash,
+        }))
     }
 }

@@ -19,6 +19,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: thumbv8m.main-none-eabihf
+
+      - name: Install just
+        uses: taiki-e/install-action@just
 
       - name: Install cargo-audit
         run: cargo install cargo-audit
@@ -27,31 +31,28 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run default feature tests
-        run: cargo test --verbose
-        
-      - name: Run serde tests
-        run: cargo test --features serde-derive --verbose
+        run: just test-default
 
-      - name: Run no_std tests
-        run: cargo test --no-default-features --features no_std --verbose
+      - name: Run serde tests
+        run: just test-serde
+
+      - name: Run blake3 feature tests
+        run: just test-blake3
+
+      - name: Run no_std checks
+        run: just test-no-std
 
       - name: Check formatting
         run: cargo fmt -- --check
 
       - name: Run clippy
-        run: cargo clippy -- -D warnings
-
-      - name: Run clippy on no_std
-        run: cargo clippy --no-default-features --features no_std -- -D warnings
-
-      - name: Run clippy on serde
-        run: cargo clippy --features serde-derive -- -D warnings
+        run: just clippy
 
       - name: Install wasm32 target
         run: rustup target add wasm32-unknown-unknown
 
       - name: Check wasm32 compilation
-        run: cargo check --target wasm32-unknown-unknown --no-default-features --features wasm
+        run: just check-wasm
 
       - name: Run security audit
-        run: cargo audit
+        run: just audit

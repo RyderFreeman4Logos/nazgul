@@ -45,7 +45,7 @@ impl BLSAG {
             return false;
         }
         if let Some(d) = precomputed_data {
-            if d.ring_hash() != ring.canonical_hash() {
+            if d.ring_hash() != ring.canonical_hash_with::<H>() {
                 return false;
             }
             if d.hashed_points().len() != n {
@@ -120,7 +120,7 @@ impl VerifyRef for BLSAG {
             return false;
         }
         if let Some(d) = precomputed_data {
-            if d.ring_hash() != ring.canonical_hash() {
+            if d.ring_hash() != ring.canonical_hash_with::<H>() {
                 return false;
             }
             if d.hashed_points().len() != n {

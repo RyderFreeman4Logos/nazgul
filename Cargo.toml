@@ -3,7 +3,7 @@ name = "nazgul"
 description = "A library that implements various ring signature schemes"
 readme = "README.md"
 license = "MIT"
-version = "3.0.0"
+version = "4.0.0"
 authors = ["Edwin Jose Palathinkal <edwinhere@gmail.com>"]
 edition = "2021"
 resolver = "2"
@@ -73,11 +73,6 @@ smallvec-responses = ["dep:smallvec"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
-
-[[test]]
-name = "no_std_tests"
-path = "tests/no_std_tests.rs"
-required-features = ["no_std"]
 
 [[bench]]
 name = "blsag_benches"

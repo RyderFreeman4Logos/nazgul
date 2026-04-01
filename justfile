@@ -1,4 +1,4 @@
-cargo_home := "$(git rev-parse --show-toplevel)/.cargo-local"
+thumb_target := "thumbv8m.main-none-eabihf"
 
 
 # Default recipe
@@ -8,43 +8,56 @@ default: pre-commit
 pre-commit: test check-fmt clippy audit check-chinese
 
 # Run all tests
-test: test-default test-serde test-no-std
+test: test-default test-serde test-no-std test-blake3
 
 # Run default feature tests
 test-default:
-    CARGO_HOME={{cargo_home}} cargo test --verbose
+    cargo test --verbose
 
 # Run serde tests
 test-serde:
-    CARGO_HOME={{cargo_home}} cargo test --features serde-derive --verbose
+    cargo test --features serde-derive --verbose
 
-# Run no_std tests
+# Run blake3 feature tests
+test-blake3:
+    cargo test --features blake3 --test blsag_tests --test streaming_equivalence --test contextual_blsag_tests --test serde_tests --verbose
+
+# Run no_std compatibility and behavior checks
 test-no-std:
-    CARGO_HOME={{cargo_home}} cargo test --no-default-features --features no_std --verbose
+    cargo check --no-default-features --features no_std --target {{thumb_target}} --verbose
+    cargo check --manifest-path tests/no_std_consumer/Cargo.toml --target {{thumb_target}} --verbose
+    cargo test --no-default-features --features no_std --lib --verbose
 
 # Check formatting
 check-fmt:
-    CARGO_HOME={{cargo_home}} cargo fmt
+    cargo fmt
     git add -A
 
 # Run all clippy checks
-clippy: clippy-default clippy-no-std clippy-serde
+clippy: clippy-default clippy-no-std clippy-serde clippy-blake3
 
 # Run clippy
 clippy-default:
-    CARGO_HOME={{cargo_home}} cargo clippy -- -D warnings
+    cargo clippy -- -D warnings
 
 # Run clippy on no_std
 clippy-no-std:
-    CARGO_HOME={{cargo_home}} cargo clippy --no-default-features --features no_std -- -D warnings
+    cargo clippy --no-default-features --features no_std --target {{thumb_target}} -- -D warnings
 
 # Run clippy on serde
 clippy-serde:
-    CARGO_HOME={{cargo_home}} cargo clippy --features serde-derive -- -D warnings
+    cargo clippy --features serde-derive -- -D warnings
+
+# Run clippy on blake3
+clippy-blake3:
+    cargo clippy --features blake3 -- -D warnings
 
 # Run security audit
 audit:
-    CARGO_HOME={{cargo_home}} cargo audit
+    cargo audit
+
+check-wasm:
+    cargo check --target wasm32-unknown-unknown --no-default-features --features wasm
 
 check-chinese:
     @echo "Checking for Chinese characters..."

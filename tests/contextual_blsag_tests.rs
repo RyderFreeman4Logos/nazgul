@@ -1,11 +1,14 @@
 #![cfg(feature = "std")]
-use nazgul::blsag::ContextualBLSAG;
+#[cfg(feature = "blake3")]
+use nazgul::blake3_compat::Blake3_512;
+use nazgul::blsag::{ContextualBLSAG, ContextualBlsagParts};
 use nazgul::keypair::KeyPair;
-use nazgul::ring::{Ring, RingContext};
+use nazgul::ring::{Ring, RingContext, RingHash};
 
 use curve25519_dalek::ristretto::RistrettoPoint;
 use rand_core::OsRng;
 use sha2::Sha512;
+use sha3::Sha3_512;
 
 fn setup_ring(n: usize) -> (Ring, KeyPair) {
     let mut csprng = OsRng;
@@ -33,7 +36,7 @@ fn test_contextual_compact_workflow() {
     .unwrap();
 
     // Ensure it stored a Hash
-    match sig.context {
+    match sig.context_ref() {
         RingContext::Compact(_) => {}
         _ => panic!("Expected Compact context"),
     }
@@ -64,7 +67,7 @@ fn test_contextual_archival_workflow() {
     .unwrap();
 
     // Ensure it stored a Ring
-    match sig.context {
+    match sig.context_ref() {
         RingContext::Archival(_) => {}
         _ => panic!("Expected Archival context"),
     }
@@ -78,6 +81,115 @@ fn test_contextual_archival_workflow() {
     // 4. Verify with mismatching external ring -> Should Fail (Enforced check)
     let (wrong_ring, _) = setup_ring(5);
     assert!(!sig.verify::<Sha512>(Some(&wrong_ring), None, message));
+}
+
+#[test]
+fn test_contextual_compact_rejects_hash_suite_mismatch() {
+    let (ring, signer) = setup_ring(5);
+    let message = b"Compact Hash Suite Mismatch";
+
+    let sig = ContextualBLSAG::sign_compact::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
+
+    assert!(
+        sig.verify::<Sha512>(Some(&ring), None, message),
+        "matching hash suite must verify"
+    );
+    assert!(
+        !sig.verify::<Sha3_512>(Some(&ring), None, message),
+        "mismatched hash suite must be rejected"
+    );
+}
+
+#[test]
+fn test_contextual_canonical_hash_is_representation_invariant() {
+    let (ring, signer) = setup_ring(5);
+    let message = b"Context Canonical Hash Stability";
+
+    let compact = ContextualBLSAG::sign_compact::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
+    let archival = ContextualBLSAG::sign_archival::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
+
+    assert_eq!(
+        compact.context().canonical_hash(),
+        archival.context().canonical_hash(),
+        "default canonical hash must be stable across compact and archival contexts"
+    );
+    assert_eq!(
+        compact.context().canonical_hash_with::<Sha512>(),
+        archival.context().canonical_hash_with::<Sha512>(),
+        "context view must expose the selected suite hash consistently"
+    );
+    assert_eq!(
+        compact.context().selected_compact_hash(),
+        Some(archival.context().canonical_hash_with::<Sha512>()),
+        "compact metadata must retain the selected suite hash"
+    );
+}
+
+#[cfg(feature = "blake3")]
+#[test]
+fn test_contextual_blake3_compact_workflow() {
+    let (ring, signer) = setup_ring(5);
+    let message = b"Compact Blake3 Workflow";
+
+    let sig = ContextualBLSAG::sign_compact::<Blake3_512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
+
+    assert!(sig.verify::<Blake3_512>(Some(&ring), None, message));
+    assert!(!sig.verify::<Sha3_512>(Some(&ring), None, message));
+    assert_eq!(
+        sig.context().canonical_hash_with::<Blake3_512>(),
+        ring.canonical_hash_with::<Blake3_512>()
+    );
+}
+
+#[test]
+fn test_contextual_parts_sanitize_archival_metadata() {
+    let (ring, signer) = setup_ring(5);
+    let message = b"Contextual Parts Sanitization";
+    let signature = ContextualBLSAG::sign_archival::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap()
+    .signature
+    .clone();
+
+    let sig = ContextualBLSAG::from_parts(ContextualBlsagParts {
+        signature,
+        context: RingContext::Archival(ring.clone()),
+        compact_selected_hash: Some(RingHash([7u8; 32])),
+    });
+
+    assert_eq!(sig.context().selected_compact_hash(), None);
+    assert_eq!(
+        sig.context().canonical_hash_with::<Sha512>(),
+        ring.canonical_hash_with::<Sha512>()
+    );
 }
 
 #[cfg(feature = "serde-derive")]
