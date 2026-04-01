@@ -9,7 +9,6 @@ use digest::Digest;
 use nazgul::blsag::{streaming::StreamingBlsagSigner, BLSAG, ContextualBLSAG};
 use nazgul::ring::Ring;
 use rand_core::{CryptoRng, RngCore};
-use sha2::Sha512;
 use sha3::Sha3_512;
 
 #[derive(Default)]
@@ -58,7 +57,7 @@ pub fn make_fake_signature(ring: &Ring) -> BLSAG {
 }
 
 pub fn make_fake_contextual_signature(ring: &Ring) -> ContextualBLSAG {
-    ContextualBLSAG::generate_fake_compact::<Sha512, ZeroRng>(ring)
+    ContextualBLSAG::generate_fake_compact::<ZeroRng>(ring)
 }
 
 pub fn compressed_identity() -> CompressedRistretto {

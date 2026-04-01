@@ -34,7 +34,7 @@ fn test_contextual_compact_workflow() {
     .unwrap();
 
     // Ensure it stored a Hash
-    match sig.context {
+    match sig.context_ref() {
         RingContext::Compact(_) => {}
         _ => panic!("Expected Compact context"),
     }
@@ -65,7 +65,7 @@ fn test_contextual_archival_workflow() {
     .unwrap();
 
     // Ensure it stored a Ring
-    match sig.context {
+    match sig.context_ref() {
         RingContext::Archival(_) => {}
         _ => panic!("Expected Archival context"),
     }

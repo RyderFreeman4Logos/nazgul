@@ -205,7 +205,7 @@ fn contextual_blsag_archival_verify_after_serde_roundtrip() {
     let deserialized: ContextualBLSAG = serde_json::from_str(&json).unwrap();
 
     // Confirm the internal ring is now in Compressed state
-    match &deserialized.context {
+    match deserialized.context_ref() {
         RingContext::Archival(r) => assert!(
             !r.is_decompressed(),
             "Internal ring should be Compressed after serde roundtrip"

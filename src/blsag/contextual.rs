@@ -23,12 +23,20 @@ use super::BLSAG;
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ContextualBLSAG {
     pub signature: BLSAG,
-    pub context: RingContext,
+    context: RingContext,
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     compact_selected_hash: Option<RingHash>,
+}
+
+/// Public construction/deconstruction parts for [`ContextualBLSAG`].
+#[derive(Clone, Debug)]
+pub struct ContextualBlsagParts {
+    pub signature: BLSAG,
+    pub context: RingContext,
+    pub compact_selected_hash: Option<RingHash>,
 }
 
 /// A view over a [`ContextualBLSAG`] ring context that preserves compact-mode
@@ -72,12 +80,39 @@ impl<'a> Deref for ContextualRingContext<'a> {
 }
 
 impl ContextualBLSAG {
+    /// Constructs a contextual signature from explicit parts.
+    pub fn from_parts(parts: ContextualBlsagParts) -> Self {
+        Self {
+            signature: parts.signature,
+            context: parts.context,
+            compact_selected_hash: parts.compact_selected_hash,
+        }
+    }
+
+    /// Deconstructs this contextual signature into explicit parts.
+    pub fn into_parts(self) -> ContextualBlsagParts {
+        ContextualBlsagParts {
+            signature: self.signature,
+            context: self.context,
+            compact_selected_hash: self.compact_selected_hash,
+        }
+    }
+
     /// Returns a reference to the inner BLSAG signature.
     pub fn signature(&self) -> &BLSAG {
         &self.signature
     }
 
-    /// Returns a reference to the ring context.
+    /// Returns the raw stored ring context.
+    ///
+    /// Compact contextual signatures store the backwards-compatible lookup hash
+    /// here. Use [`context`](Self::context) when you need suite-aware hash
+    /// semantics for compact signatures.
+    pub fn context_ref(&self) -> &RingContext {
+        &self.context
+    }
+
+    /// Returns a suite-aware view over the ring context.
     pub fn context(&self) -> ContextualRingContext<'_> {
         ContextualRingContext {
             raw: &self.context,
@@ -173,20 +208,15 @@ impl ContextualBLSAG {
     /// Generates a fake ContextualBLSAG with Compact context using an externally provided RNG.
     ///
     /// See `BLSAG::generate_fake_with_rng` for details.
-    pub fn generate_fake_compact_with_rng<
-        H: Digest<OutputSize = U64> + Clone + Default,
-        R: CryptoRng + RngCore,
-    >(
+    pub fn generate_fake_compact_with_rng<R: CryptoRng + RngCore>(
         ring: &Ring,
         rng: &mut R,
     ) -> Self {
         let signature = BLSAG::generate_fake_with_rng(ring, rng);
-        let canonical_hash = ring.canonical_hash();
-        let selected_hash = ring.canonical_hash_with::<H>();
         Self {
             signature,
-            context: RingContext::Compact(canonical_hash),
-            compact_selected_hash: (selected_hash != canonical_hash).then_some(selected_hash),
+            context: RingContext::Compact(ring.canonical_hash()),
+            compact_selected_hash: None,
         }
     }
 
@@ -194,14 +224,9 @@ impl ContextualBLSAG {
     ///
     /// Convenience wrapper that creates a CSPRNG via `Default` and delegates to
     /// [`generate_fake_compact_with_rng`](Self::generate_fake_compact_with_rng).
-    pub fn generate_fake_compact<
-        H: Digest<OutputSize = U64> + Clone + Default,
-        CSPRNG: CryptoRng + RngCore + Default,
-    >(
-        ring: &Ring,
-    ) -> Self {
+    pub fn generate_fake_compact<CSPRNG: CryptoRng + RngCore + Default>(ring: &Ring) -> Self {
         let mut csprng = CSPRNG::default();
-        Self::generate_fake_compact_with_rng::<H, CSPRNG>(ring, &mut csprng)
+        Self::generate_fake_compact_with_rng(ring, &mut csprng)
     }
 
     /// Generates a fake ContextualBLSAG with Archival context using an externally provided RNG.
