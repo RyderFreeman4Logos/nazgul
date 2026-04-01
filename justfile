@@ -1,4 +1,3 @@
-cargo_home := "$(git rev-parse --show-toplevel)/.cargo-local"
 thumb_target := "thumbv8m.main-none-eabihf"
 
 
@@ -13,21 +12,21 @@ test: test-default test-serde test-no-std
 
 # Run default feature tests
 test-default:
-    CARGO_HOME={{cargo_home}} cargo test --verbose
+    cargo test --verbose
 
 # Run serde tests
 test-serde:
-    CARGO_HOME={{cargo_home}} cargo test --features serde-derive --verbose
+    cargo test --features serde-derive --verbose
 
 # Run no_std compatibility and behavior checks
 test-no-std:
-    CARGO_HOME={{cargo_home}} cargo check --no-default-features --features no_std --target {{thumb_target}} --verbose
-    CARGO_HOME={{cargo_home}} cargo check --manifest-path tests/no_std_consumer/Cargo.toml --target {{thumb_target}} --verbose
-    CARGO_HOME={{cargo_home}} cargo test --no-default-features --features no_std --lib --verbose
+    cargo check --no-default-features --features no_std --target {{thumb_target}} --verbose
+    cargo check --manifest-path tests/no_std_consumer/Cargo.toml --target {{thumb_target}} --verbose
+    cargo test --no-default-features --features no_std --lib --verbose
 
 # Check formatting
 check-fmt:
-    CARGO_HOME={{cargo_home}} cargo fmt
+    cargo fmt
     git add -A
 
 # Run all clippy checks
@@ -35,19 +34,22 @@ clippy: clippy-default clippy-no-std clippy-serde
 
 # Run clippy
 clippy-default:
-    CARGO_HOME={{cargo_home}} cargo clippy -- -D warnings
+    cargo clippy -- -D warnings
 
 # Run clippy on no_std
 clippy-no-std:
-    CARGO_HOME={{cargo_home}} cargo clippy --no-default-features --features no_std --target {{thumb_target}} -- -D warnings
+    cargo clippy --no-default-features --features no_std --target {{thumb_target}} -- -D warnings
 
 # Run clippy on serde
 clippy-serde:
-    CARGO_HOME={{cargo_home}} cargo clippy --features serde-derive -- -D warnings
+    cargo clippy --features serde-derive -- -D warnings
 
 # Run security audit
 audit:
-    CARGO_HOME={{cargo_home}} cargo audit
+    cargo audit
+
+check-wasm:
+    cargo check --target wasm32-unknown-unknown --no-default-features --features wasm
 
 check-chinese:
     @echo "Checking for Chinese characters..."
