@@ -8,7 +8,7 @@ default: pre-commit
 pre-commit: test check-fmt clippy audit check-chinese
 
 # Run all tests
-test: test-default test-serde test-no-std
+test: test-default test-serde test-no-std test-blake3
 
 # Run default feature tests
 test-default:
@@ -17,6 +17,10 @@ test-default:
 # Run serde tests
 test-serde:
     cargo test --features serde-derive --verbose
+
+# Run blake3 feature tests
+test-blake3:
+    cargo test --features blake3 --test blsag_tests --test streaming_equivalence --verbose
 
 # Run no_std compatibility and behavior checks
 test-no-std:
@@ -30,7 +34,7 @@ check-fmt:
     git add -A
 
 # Run all clippy checks
-clippy: clippy-default clippy-no-std clippy-serde
+clippy: clippy-default clippy-no-std clippy-serde clippy-blake3
 
 # Run clippy
 clippy-default:
@@ -43,6 +47,10 @@ clippy-no-std:
 # Run clippy on serde
 clippy-serde:
     cargo clippy --features serde-derive -- -D warnings
+
+# Run clippy on blake3
+clippy-blake3:
+    cargo clippy --features blake3 -- -D warnings
 
 # Run security audit
 audit:

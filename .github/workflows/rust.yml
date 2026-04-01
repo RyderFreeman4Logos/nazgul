@@ -36,6 +36,9 @@ jobs:
       - name: Run serde tests
         run: just test-serde
 
+      - name: Run blake3 feature tests
+        run: just test-blake3
+
       - name: Run no_std checks
         run: just test-no-std
 

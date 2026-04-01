@@ -45,6 +45,18 @@ impl<'a> ContextualRingContext<'a> {
         self.raw.canonical_hash()
     }
 
+    /// Returns the canonical hash associated with this context using the
+    /// caller-chosen digest `H`.
+    ///
+    /// Compact contextual signatures keep the legacy lookup hash inside
+    /// [`RingContext`] for backwards compatibility and store the suite-aware
+    /// compact hash as side metadata. Prefer that metadata when it exists so
+    /// callers observe the correct hash for the selected digest suite.
+    pub fn canonical_hash_with<H: Digest<OutputSize = U64> + Clone + Default>(&self) -> RingHash {
+        self.compact_selected_hash
+            .unwrap_or_else(|| self.raw.canonical_hash_with::<H>())
+    }
+
     /// Returns the compact-mode hash metadata for the selected digest suite, if present.
     pub fn selected_compact_hash(&self) -> Option<RingHash> {
         self.compact_selected_hash

@@ -130,6 +130,11 @@ fn test_contextual_canonical_hash_is_representation_invariant() {
         "default canonical hash must be stable across compact and archival contexts"
     );
     assert_eq!(
+        compact.context().canonical_hash_with::<Sha512>(),
+        archival.context().canonical_hash_with::<Sha512>(),
+        "context view must expose the selected suite hash consistently"
+    );
+    assert_eq!(
         compact.context().selected_compact_hash(),
         Some(archival.context().canonical_hash_with::<Sha512>()),
         "compact metadata must retain the selected suite hash"
