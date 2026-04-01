@@ -8,9 +8,15 @@ use sha3::Sha3_512;
 
 /// A strongly-typed wrapper for a 32-byte canonical hash of a Ring.
 ///
-/// The hash is always computed using SHA3-512, truncated to 32 bytes.
-/// This guarantees that the same set of sorted ring members always produces
-/// the same `RingHash`, regardless of caller-chosen digest algorithms.
+/// `RingHash` is an opaque 32-byte identifier. The exact digest suite depends on
+/// the API used to compute it:
+///
+/// - [`Ring::canonical_hash`](crate::ring::Ring::canonical_hash) uses the
+///   backwards-compatible default of SHA3-512 truncated to 32 bytes.
+/// - [`Ring::canonical_hash_with`](crate::ring::Ring::canonical_hash_with)
+///   derives the hash from the caller-chosen digest `H`, truncated to 32 bytes.
+///
+/// Hashes computed with different digest suites are not interchangeable.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RingHash(pub [u8; 32]);
@@ -47,12 +53,15 @@ impl From<[u8; 32]> for RingHash {
 }
 
 impl RingHash {
-    /// Computes a canonical `RingHash` from a slice of compressed points.
+    /// Computes a canonical `RingHash` from a slice of compressed points using
+    /// a caller-chosen digest `H`, truncated to 32 bytes.
     ///
-    /// Uses SHA3-512 as the fixed digest algorithm, truncated to 32 bytes.
-    /// The caller is responsible for ensuring members are sorted (as `Ring` guarantees).
-    pub(crate) fn from_compressed_members(members: &[CompressedRistretto]) -> Self {
-        let mut hasher = Sha3_512::default();
+    /// The caller is responsible for ensuring members are sorted (as `Ring`
+    /// guarantees).
+    pub(crate) fn from_compressed_members_with<H: Digest<OutputSize = U64> + Clone + Default>(
+        members: &[CompressedRistretto],
+    ) -> Self {
+        let mut hasher = H::default();
         for member in members {
             hasher.update(member.as_bytes());
         }
@@ -61,13 +70,20 @@ impl RingHash {
         bytes.copy_from_slice(&output[..32]);
         Self(bytes)
     }
+
+    /// Computes a canonical `RingHash` using the backwards-compatible default
+    /// digest suite (SHA3-512 truncated to 32 bytes).
+    pub(crate) fn from_compressed_members(members: &[CompressedRistretto]) -> Self {
+        Self::from_compressed_members_with::<Sha3_512>(members)
+    }
 }
 
 /// Defines the context in which a ring signature is stored or verified.
 ///
-/// *   `Compact`: Contains only the `RingHash`. This is ideal for network transmission
-///     and storage when the Verifier is expected to have access to the Ring definition
-///     (e.g., via a cache or database).
+/// *   `Compact`: Contains only the `RingHash`. This is ideal for network
+///     transmission and storage when the Verifier is expected to have access to
+///     the Ring definition (e.g., via a cache or database). Applications must
+///     track which digest suite produced the stored hash.
 /// *   `Archival`: Contains the full `Ring` definition. This makes the signature
 ///     self-contained but significantly larger. Ideal for cold storage or sharing.
 #[derive(Clone, Debug)]
@@ -79,14 +95,30 @@ pub enum RingContext {
 }
 
 impl RingContext {
-    /// Returns the canonical hash associated with this context.
+    /// Returns the canonical hash associated with this context using the
+    /// backwards-compatible default digest suite (SHA3-512 truncated to 32
+    /// bytes for archival contexts).
     ///
     /// If `Compact`, returns the stored hash.
-    /// If `Archival`, computes the canonical hash of the stored ring.
+    /// If `Archival`, computes the canonical hash of the stored ring with the
+    /// default digest.
     pub fn canonical_hash(&self) -> RingHash {
         match self {
             RingContext::Compact(h) => *h,
             RingContext::Archival(ring) => ring.canonical_hash(),
+        }
+    }
+
+    /// Returns the canonical hash associated with this context using the
+    /// caller-chosen digest `H`.
+    ///
+    /// If `Compact`, returns the stored hash as-is. Callers are responsible for
+    /// passing the same digest suite that was used when the compact hash was
+    /// produced.
+    pub fn canonical_hash_with<H: Digest<OutputSize = U64> + Clone + Default>(&self) -> RingHash {
+        match self {
+            RingContext::Compact(h) => *h,
+            RingContext::Archival(ring) => ring.canonical_hash_with::<H>(),
         }
     }
 }
@@ -97,10 +129,10 @@ impl RingContext {
 /// at compile time. This prevents accidentally using a `PreparedRing<Sha512>`
 /// with a `verify::<Blake2b512>()` call — the compiler will reject the mismatch.
 ///
-/// This structure holds the results of hashing each public key in the ring onto the curve,
-/// along with the canonical [`RingHash`] of the ring it was computed from. The `ring_hash`
-/// is checked during signing and verification to ensure the prepared data matches
-/// the ring being used.
+/// This structure holds the results of hashing each public key in the ring onto
+/// the curve, along with the canonical [`RingHash`] of the ring it was computed
+/// from using the same digest `H`. The `ring_hash` is checked during signing and
+/// verification to ensure the prepared data matches the ring being used.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(bound(serialize = "", deserialize = "")))]
@@ -121,18 +153,19 @@ impl<H> PreparedRing<H> {
     pub fn ring_hash(&self) -> RingHash {
         self.ring_hash
     }
-
-    /// Returns `true` if this prepared data was computed from the given ring.
-    ///
-    /// This is a fast O(1) check that compares the stored `ring_hash` against
-    /// the ring's current canonical hash. It does **not** re-derive the hashed
-    /// points — use [`verify`](Self::verify) for a full cryptographic check.
-    pub fn is_valid_for(&self, ring: &Ring) -> bool {
-        self.ring_hash == ring.canonical_hash()
-    }
 }
 
 impl<H: Digest<OutputSize = U64> + Clone + Default> PreparedRing<H> {
+    /// Returns `true` if this prepared data was computed from the given ring.
+    ///
+    /// This is a fast O(1) check that compares the stored `ring_hash` against
+    /// the ring's current canonical hash under the same digest `H`. It does
+    /// **not** re-derive the hashed points — use [`verify`](Self::verify) for a
+    /// full cryptographic check.
+    pub fn is_valid_for(&self, ring: &Ring) -> bool {
+        self.ring_hash == ring.canonical_hash_with::<H>()
+    }
+
     /// Verifies that the pre-computed data is valid for the given `Ring`.
     ///
     /// This is a crucial security step. It checks that the canonical ring hash matches,
@@ -143,7 +176,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default> PreparedRing<H> {
     ///
     /// Panics if the ring is in `Compressed` state. Call `decompress()` first.
     pub fn verify(&self, ring: &Ring) -> bool {
-        if self.ring_hash != ring.canonical_hash() {
+        if self.ring_hash != ring.canonical_hash_with::<H>() {
             return false;
         }
         let members = ring.members();
@@ -335,9 +368,9 @@ impl Ring {
 
     /// Computes the canonical hash of this ring.
     ///
-    /// Uses SHA3-512 (truncated to 32 bytes) as the fixed digest algorithm, ensuring
-    /// the same ring members always produce the same `RingHash` regardless of the
-    /// caller's choice of cryptographic hash function.
+    /// Uses SHA3-512 (truncated to 32 bytes) as the backwards-compatible default
+    /// digest. For algorithm-aligned workflows such as multi-suite hardware keys,
+    /// prefer [`canonical_hash_with`](Self::canonical_hash_with).
     ///
     /// Since `Ring` guarantees its members are sorted, this hash is deterministic
     /// regardless of the order in which keys were originally provided to `Ring::new()`.
@@ -363,6 +396,16 @@ impl Ring {
         RingHash::from_compressed_members(self.compressed_members())
     }
 
+    /// Computes the canonical hash of this ring using the caller-chosen digest
+    /// `H`, truncated to 32 bytes.
+    ///
+    /// This is the algorithm-aligned variant used by prepared rings, compact
+    /// contextual signatures, and streaming validation when a non-default hash
+    /// suite is selected.
+    pub fn canonical_hash_with<H: Digest<OutputSize = U64> + Clone + Default>(&self) -> RingHash {
+        RingHash::from_compressed_members_with::<H>(self.compressed_members())
+    }
+
     /// Performs the pre-computation step for this ring.
     ///
     /// This iterates through all public keys in the ring, hashes them to a point on
@@ -386,7 +429,7 @@ impl Ring {
             })
             .collect();
         PreparedRing {
-            ring_hash: self.canonical_hash(),
+            ring_hash: self.canonical_hash_with::<H>(),
             hashed_points,
             _hash: PhantomData,
         }
@@ -472,7 +515,11 @@ fn sort_and_compress(members: Vec<RistrettoPoint>) -> SortedMembers {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::Sha512;
     use sha3::Sha3_512;
+
+    #[cfg(feature = "blake3")]
+    use crate::blake3_compat::Blake3_512;
 
     fn sample_points() -> Vec<RistrettoPoint> {
         ["alpha", "beta", "gamma"]
@@ -554,6 +601,37 @@ mod tests {
         let compressed_ring = Ring::from_compressed(compressed);
 
         assert_eq!(full_ring.canonical_hash(), compressed_ring.canonical_hash());
+    }
+
+    #[test]
+    fn canonical_hash_default_matches_sha3_suite() {
+        let ring = Ring::new(sample_points());
+
+        assert_eq!(
+            ring.canonical_hash(),
+            ring.canonical_hash_with::<Sha3_512>()
+        );
+    }
+
+    #[test]
+    fn canonical_hash_varies_by_digest_suite() {
+        let ring = Ring::new(sample_points());
+
+        assert_ne!(
+            ring.canonical_hash_with::<Sha3_512>(),
+            ring.canonical_hash_with::<Sha512>()
+        );
+    }
+
+    #[cfg(feature = "blake3")]
+    #[test]
+    fn canonical_hash_blake3_is_distinct_from_sha3() {
+        let ring = Ring::new(sample_points());
+
+        assert_ne!(
+            ring.canonical_hash_with::<Blake3_512>(),
+            ring.canonical_hash_with::<Sha3_512>()
+        );
     }
 
     #[test]
@@ -765,6 +843,16 @@ mod tests {
             prepared.verify(&decompressed),
             "PreparedRing full verify must pass against equivalent decompressed ring"
         );
+    }
+
+    #[test]
+    fn prepared_ring_hash_uses_selected_digest_suite() {
+        let ring = Ring::new(sample_points());
+        let prepared = ring.precompute::<Sha512>();
+
+        assert_eq!(prepared.ring_hash(), ring.canonical_hash_with::<Sha512>());
+        assert_ne!(prepared.ring_hash(), ring.canonical_hash_with::<Sha3_512>());
+        assert!(prepared.is_valid_for(&ring));
     }
 
     #[test]

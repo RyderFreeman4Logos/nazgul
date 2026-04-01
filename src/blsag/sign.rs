@@ -66,7 +66,7 @@ impl BLSAG {
 
         // If precomputed data is provided, verify it belongs to this ring.
         if let Some(d) = precomputed_data {
-            if d.ring_hash() != ring.canonical_hash() {
+            if d.ring_hash() != ring.canonical_hash_with::<H>() {
                 return Err(SignatureError::RingMismatch);
             }
             if d.hashed_points().len() != n {
@@ -224,7 +224,7 @@ impl BLSAG {
         let n = ring_members.len();
 
         if let Some(d) = precomputed_data {
-            if d.ring_hash() != ring.canonical_hash() {
+            if d.ring_hash() != ring.canonical_hash_with::<H>() {
                 return Err(SignatureError::RingMismatch);
             }
             if d.hashed_points().len() != n {
@@ -254,7 +254,7 @@ impl BLSAG {
             alpha: SecretScalar(alpha),
             alpha_g,
             alpha_hp,
-            ring_hash: ring.canonical_hash(),
+            ring_hash: ring.canonical_hash_with::<H>(),
             signer_index: secret_index,
             key_image,
             responses,
@@ -277,7 +277,7 @@ impl BLSAG {
         if !ring.is_decompressed() {
             return Err(SignatureError::CompressedRing);
         }
-        if precomp.ring_hash != ring.canonical_hash() {
+        if precomp.ring_hash != ring.canonical_hash_with::<H>() {
             return Err(SignatureError::RingMismatch);
         }
 
@@ -289,7 +289,7 @@ impl BLSAG {
         }
 
         if let Some(d) = precomputed_data {
-            if d.ring_hash() != ring.canonical_hash() {
+            if d.ring_hash() != ring.canonical_hash_with::<H>() {
                 return Err(SignatureError::RingMismatch);
             }
             if d.hashed_points().len() != n {

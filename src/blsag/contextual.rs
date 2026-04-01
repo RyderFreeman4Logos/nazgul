@@ -54,7 +54,7 @@ impl ContextualBLSAG {
         let signature = BLSAG::sign_with_rng::<H, R>(k, ring, precomputed_data, message, rng)?;
         Ok(Self {
             signature,
-            context: RingContext::Compact(ring.canonical_hash()),
+            context: RingContext::Compact(ring.canonical_hash_with::<H>()),
         })
     }
 
@@ -117,14 +117,17 @@ impl ContextualBLSAG {
     /// Generates a fake ContextualBLSAG with Compact context using an externally provided RNG.
     ///
     /// See `BLSAG::generate_fake_with_rng` for details.
-    pub fn generate_fake_compact_with_rng<R: CryptoRng + RngCore>(
+    pub fn generate_fake_compact_with_rng<
+        H: Digest<OutputSize = U64> + Clone + Default,
+        R: CryptoRng + RngCore,
+    >(
         ring: &Ring,
         rng: &mut R,
     ) -> Self {
         let signature = BLSAG::generate_fake_with_rng(ring, rng);
         Self {
             signature,
-            context: RingContext::Compact(ring.canonical_hash()),
+            context: RingContext::Compact(ring.canonical_hash_with::<H>()),
         }
     }
 
@@ -132,9 +135,14 @@ impl ContextualBLSAG {
     ///
     /// Convenience wrapper that creates a CSPRNG via `Default` and delegates to
     /// [`generate_fake_compact_with_rng`](Self::generate_fake_compact_with_rng).
-    pub fn generate_fake_compact<CSPRNG: CryptoRng + RngCore + Default>(ring: &Ring) -> Self {
+    pub fn generate_fake_compact<
+        H: Digest<OutputSize = U64> + Clone + Default,
+        CSPRNG: CryptoRng + RngCore + Default,
+    >(
+        ring: &Ring,
+    ) -> Self {
         let mut csprng = CSPRNG::default();
-        Self::generate_fake_compact_with_rng(ring, &mut csprng)
+        Self::generate_fake_compact_with_rng::<H, CSPRNG>(ring, &mut csprng)
     }
 
     /// Generates a fake ContextualBLSAG with Archival context using an externally provided RNG.
@@ -164,7 +172,8 @@ impl ContextualBLSAG {
     ///
     /// *   `external_ring`:
     ///     *   If `context` is `Compact`, this is **REQUIRED**. The verification will fail if `None`.
-    ///         The method checks if `external_ring.canonical_hash() == stored_hash` before verifying.
+    ///         The method checks if `external_ring.canonical_hash_with::<H>() == stored_hash`
+    ///         before verifying.
     ///     *   If `context` is `Archival`, this is **OPTIONAL**.
     ///         *   If provided, it checks if `external_ring` matches the stored ring.
     ///         *   It always uses the stored (internal) ring for the mathematical verification.
@@ -181,7 +190,7 @@ impl ContextualBLSAG {
                     None => return false,
                 };
 
-                if *stored_hash != ring.canonical_hash() {
+                if *stored_hash != ring.canonical_hash_with::<H>() {
                     return false;
                 }
 
@@ -203,7 +212,9 @@ impl ContextualBLSAG {
             }
             RingContext::Archival(internal_ring) => {
                 if let Some(external) = external_ring {
-                    if internal_ring.canonical_hash() != external.canonical_hash() {
+                    if internal_ring.canonical_hash_with::<H>()
+                        != external.canonical_hash_with::<H>()
+                    {
                         return false;
                     }
                 }

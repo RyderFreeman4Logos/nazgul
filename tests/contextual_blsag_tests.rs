@@ -6,6 +6,7 @@ use nazgul::ring::{Ring, RingContext};
 use curve25519_dalek::ristretto::RistrettoPoint;
 use rand_core::OsRng;
 use sha2::Sha512;
+use sha3::Sha3_512;
 
 fn setup_ring(n: usize) -> (Ring, KeyPair) {
     let mut csprng = OsRng;
@@ -78,6 +79,29 @@ fn test_contextual_archival_workflow() {
     // 4. Verify with mismatching external ring -> Should Fail (Enforced check)
     let (wrong_ring, _) = setup_ring(5);
     assert!(!sig.verify::<Sha512>(Some(&wrong_ring), None, message));
+}
+
+#[test]
+fn test_contextual_compact_rejects_hash_suite_mismatch() {
+    let (ring, signer) = setup_ring(5);
+    let message = b"Compact Hash Suite Mismatch";
+
+    let sig = ContextualBLSAG::sign_compact::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
+
+    assert!(
+        sig.verify::<Sha512>(Some(&ring), None, message),
+        "matching hash suite must verify"
+    );
+    assert!(
+        !sig.verify::<Sha3_512>(Some(&ring), None, message),
+        "mismatched hash suite must be rejected"
+    );
 }
 
 #[cfg(feature = "serde-derive")]

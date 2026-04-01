@@ -665,3 +665,29 @@ fn blake3_sign_verify_roundtrip() {
         &signature, &ring, None, MESSAGE
     ));
 }
+
+#[cfg(feature = "blake3")]
+#[test]
+fn blake3_precomputed_sign_verify_roundtrip() {
+    use nazgul::blake3_compat::Blake3_512;
+
+    let mut csprng = OsRng;
+    let kp = KeyPair::generate(&mut csprng);
+    let k = *kp.secret().unwrap();
+
+    let mut public_keys = generate_ring(&mut csprng, 7);
+    public_keys.push(*kp.public());
+    let ring = Ring::new(public_keys);
+    let ring_data = ring.precompute::<Blake3_512>();
+
+    let precomp = BLSAG::precompute_signing::<Blake3_512, _>(k, &ring, None, &mut csprng).unwrap();
+    let signature =
+        BLSAG::sign_precomputed::<Blake3_512>(precomp, &ring, Some(&ring_data), MESSAGE).unwrap();
+
+    assert!(BLSAG::verify::<Blake3_512>(
+        &signature,
+        &ring,
+        Some(&ring_data),
+        MESSAGE
+    ));
+}
