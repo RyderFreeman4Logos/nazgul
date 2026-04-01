@@ -112,8 +112,9 @@ impl RingContext {
     /// Returns the canonical hash associated with this context using the
     /// caller-chosen digest `H`.
     ///
-    /// If `Compact`, returns the stored lookup hash as-is because the full ring
-    /// is not embedded and therefore cannot be re-hashed under `H`.
+    /// If `Compact`, returns the stored legacy lookup hash as-is because the
+    /// full ring is not embedded here. Suite-aware contextual signatures carry
+    /// any additional compact metadata outside [`RingContext`] itself.
     pub fn canonical_hash_with<H: Digest<OutputSize = U64> + Clone + Default>(&self) -> RingHash {
         match self {
             RingContext::Compact(hash) => *hash,

@@ -257,4 +257,44 @@ fn contextual_blsag_compact_verify_after_serde_roundtrip() {
         deserialized_sig.verify::<Sha512>(Some(&deserialized_ring), None, message),
         "Compact verify must auto-decompress external ring after serde roundtrip"
     );
+    assert_eq!(
+        deserialized_sig.context().selected_compact_hash(),
+        Some(ring.canonical_hash_with::<Sha512>()),
+        "Compact serde roundtrip must preserve the suite-specific context hash"
+    );
+}
+
+#[test]
+fn contextual_blsag_compact_legacy_payload_without_selected_hash_still_verifies() {
+    let mut csprng = OsRng;
+    let signer = KeyPair::generate(&mut csprng);
+    let mut public_keys: Vec<RistrettoPoint> = (0..4)
+        .map(|_| *KeyPair::generate(&mut csprng).public())
+        .collect();
+    public_keys.push(*signer.public());
+    let ring = Ring::new(public_keys);
+    let message = b"Compact legacy payload fallback";
+
+    let sig = ContextualBLSAG::sign_compact::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
+
+    let sig_json = serde_json::to_value(&sig).unwrap();
+    let mut sig_object = sig_json.as_object().unwrap().clone();
+    sig_object.remove("compact_selected_hash");
+    let legacy_sig: ContextualBLSAG = serde_json::from_value(sig_object.into()).unwrap();
+
+    assert!(
+        legacy_sig.verify::<Sha512>(Some(&ring), None, message),
+        "Legacy compact payloads without suite metadata must remain verifiable"
+    );
+    assert_eq!(
+        legacy_sig.context().selected_compact_hash(),
+        None,
+        "Legacy payloads should deserialize without synthetic suite metadata"
+    );
 }

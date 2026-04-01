@@ -148,11 +148,16 @@ fn test_keypair_roundtrip_no_std() {
 #[test]
 fn test_ring_canonical_hash_no_std() {
     let mut csprng = OsRng;
-    let points: Vec<RistrettoPoint> = (0..4).map(|_| RistrettoPoint::random(&mut csprng)).collect();
+    let points: Vec<RistrettoPoint> = (0..4)
+        .map(|_| RistrettoPoint::random(&mut csprng))
+        .collect();
 
     let full_ring = Ring::new(points);
     let compressed_ring = Ring::from_compressed(full_ring.compressed_members().to_vec());
 
     assert_eq!(full_ring.canonical_hash(), compressed_ring.canonical_hash());
-    assert_eq!(full_ring.canonical_hash_with::<Sha512>(), compressed_ring.canonical_hash_with::<Sha512>());
+    assert_eq!(
+        full_ring.canonical_hash_with::<Sha512>(),
+        compressed_ring.canonical_hash_with::<Sha512>()
+    );
 }
