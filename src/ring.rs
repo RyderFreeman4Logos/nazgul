@@ -104,7 +104,7 @@ impl RingContext {
     /// default digest.
     pub fn canonical_hash(&self) -> RingHash {
         match self {
-            RingContext::Compact(h) => *h,
+            RingContext::Compact(hash) => *hash,
             RingContext::Archival(ring) => ring.canonical_hash(),
         }
     }
@@ -112,12 +112,11 @@ impl RingContext {
     /// Returns the canonical hash associated with this context using the
     /// caller-chosen digest `H`.
     ///
-    /// If `Compact`, returns the stored hash as-is. Callers are responsible for
-    /// passing the same digest suite that was used when the compact hash was
-    /// produced.
+    /// If `Compact`, returns the stored lookup hash as-is because the full ring
+    /// is not embedded and therefore cannot be re-hashed under `H`.
     pub fn canonical_hash_with<H: Digest<OutputSize = U64> + Clone + Default>(&self) -> RingHash {
         match self {
-            RingContext::Compact(h) => *h,
+            RingContext::Compact(hash) => *hash,
             RingContext::Archival(ring) => ring.canonical_hash_with::<H>(),
         }
     }
@@ -399,9 +398,8 @@ impl Ring {
     /// Computes the canonical hash of this ring using the caller-chosen digest
     /// `H`, truncated to 32 bytes.
     ///
-    /// This is the algorithm-aligned variant used by prepared rings, compact
-    /// contextual signatures, and streaming validation when a non-default hash
-    /// suite is selected.
+    /// This is the algorithm-aligned variant used by prepared rings and
+    /// streaming validation when a non-default hash suite is selected.
     pub fn canonical_hash_with<H: Digest<OutputSize = U64> + Clone + Default>(&self) -> RingHash {
         RingHash::from_compressed_members_with::<H>(self.compressed_members())
     }

@@ -104,6 +104,33 @@ fn test_contextual_compact_rejects_hash_suite_mismatch() {
     );
 }
 
+#[test]
+fn test_contextual_canonical_hash_is_representation_invariant() {
+    let (ring, signer) = setup_ring(5);
+    let message = b"Context Canonical Hash Stability";
+
+    let compact = ContextualBLSAG::sign_compact::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
+    let archival = ContextualBLSAG::sign_archival::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
+
+    assert_eq!(
+        compact.context().canonical_hash(),
+        archival.context().canonical_hash(),
+        "default canonical hash must be stable across compact and archival contexts"
+    );
+}
+
 #[cfg(feature = "serde-derive")]
 #[test]
 fn test_contextual_serde() {
