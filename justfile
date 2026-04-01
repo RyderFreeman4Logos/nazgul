@@ -20,7 +20,7 @@ test-serde:
 
 # Run blake3 feature tests
 test-blake3:
-    cargo test --features blake3 --test blsag_tests --test streaming_equivalence --verbose
+    cargo test --features blake3 --test blsag_tests --test streaming_equivalence --test contextual_blsag_tests --test serde_tests --verbose
 
 # Run no_std compatibility and behavior checks
 test-no-std:

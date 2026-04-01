@@ -7,7 +7,7 @@ use digest::generic_array::typenum::U64;
 use digest::Digest;
 use rand_core::{CryptoRng, RngCore};
 #[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::BLSAG;
 
@@ -20,7 +20,7 @@ use super::BLSAG;
 /// 2.  **Archival**: Stores the full ring definition alongside the signature. This creates
 ///     a self-contained proof that can be verified offline or cross-system without external dependencies.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct ContextualBLSAG {
     pub signature: BLSAG,
     context: RingContext,
@@ -37,6 +37,15 @@ pub struct ContextualBlsagParts {
     pub signature: BLSAG,
     pub context: RingContext,
     pub compact_selected_hash: Option<RingHash>,
+}
+
+#[cfg(feature = "serde")]
+#[derive(Deserialize)]
+struct ContextualBlsagSerde {
+    signature: BLSAG,
+    context: RingContext,
+    #[serde(default)]
+    compact_selected_hash: Option<RingHash>,
 }
 
 /// A view over a [`ContextualBLSAG`] ring context that preserves compact-mode
@@ -80,12 +89,26 @@ impl<'a> Deref for ContextualRingContext<'a> {
 }
 
 impl ContextualBLSAG {
+    fn normalized_compact_selected_hash(
+        context: &RingContext,
+        compact_selected_hash: Option<RingHash>,
+    ) -> Option<RingHash> {
+        match context {
+            RingContext::Compact(lookup_hash) => {
+                compact_selected_hash.filter(|selected_hash| selected_hash != lookup_hash)
+            }
+            RingContext::Archival(_) => None,
+        }
+    }
+
     /// Constructs a contextual signature from explicit parts.
     pub fn from_parts(parts: ContextualBlsagParts) -> Self {
+        let compact_selected_hash =
+            Self::normalized_compact_selected_hash(&parts.context, parts.compact_selected_hash);
         Self {
             signature: parts.signature,
             context: parts.context,
-            compact_selected_hash: parts.compact_selected_hash,
+            compact_selected_hash,
         }
     }
 
@@ -116,7 +139,10 @@ impl ContextualBLSAG {
     pub fn context(&self) -> ContextualRingContext<'_> {
         ContextualRingContext {
             raw: &self.context,
-            compact_selected_hash: self.compact_selected_hash,
+            compact_selected_hash: Self::normalized_compact_selected_hash(
+                &self.context,
+                self.compact_selected_hash,
+            ),
         }
     }
 
@@ -323,5 +349,17 @@ impl ContextualBLSAG {
                 }
             }
         }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> Deserialize<'de> for ContextualBLSAG {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = ContextualBlsagSerde::deserialize(deserializer)?;
+        Ok(Self::from_parts(ContextualBlsagParts {
+            signature: raw.signature,
+            context: raw.context,
+            compact_selected_hash: raw.compact_selected_hash,
+        }))
     }
 }

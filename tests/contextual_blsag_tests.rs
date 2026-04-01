@@ -1,7 +1,9 @@
 #![cfg(feature = "std")]
-use nazgul::blsag::ContextualBLSAG;
+#[cfg(feature = "blake3")]
+use nazgul::blake3_compat::Blake3_512;
+use nazgul::blsag::{ContextualBLSAG, ContextualBlsagParts};
 use nazgul::keypair::KeyPair;
-use nazgul::ring::{Ring, RingContext};
+use nazgul::ring::{Ring, RingContext, RingHash};
 
 use curve25519_dalek::ristretto::RistrettoPoint;
 use rand_core::OsRng;
@@ -138,6 +140,55 @@ fn test_contextual_canonical_hash_is_representation_invariant() {
         compact.context().selected_compact_hash(),
         Some(archival.context().canonical_hash_with::<Sha512>()),
         "compact metadata must retain the selected suite hash"
+    );
+}
+
+#[cfg(feature = "blake3")]
+#[test]
+fn test_contextual_blake3_compact_workflow() {
+    let (ring, signer) = setup_ring(5);
+    let message = b"Compact Blake3 Workflow";
+
+    let sig = ContextualBLSAG::sign_compact::<Blake3_512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap();
+
+    assert!(sig.verify::<Blake3_512>(Some(&ring), None, message));
+    assert!(!sig.verify::<Sha3_512>(Some(&ring), None, message));
+    assert_eq!(
+        sig.context().canonical_hash_with::<Blake3_512>(),
+        ring.canonical_hash_with::<Blake3_512>()
+    );
+}
+
+#[test]
+fn test_contextual_parts_sanitize_archival_metadata() {
+    let (ring, signer) = setup_ring(5);
+    let message = b"Contextual Parts Sanitization";
+    let signature = ContextualBLSAG::sign_archival::<Sha512, OsRng>(
+        *signer.secret().unwrap(),
+        &ring,
+        None,
+        message,
+    )
+    .unwrap()
+    .signature
+    .clone();
+
+    let sig = ContextualBLSAG::from_parts(ContextualBlsagParts {
+        signature,
+        context: RingContext::Archival(ring.clone()),
+        compact_selected_hash: Some(RingHash([7u8; 32])),
+    });
+
+    assert_eq!(sig.context().selected_compact_hash(), None);
+    assert_eq!(
+        sig.context().canonical_hash_with::<Sha512>(),
+        ring.canonical_hash_with::<Sha512>()
     );
 }
 
