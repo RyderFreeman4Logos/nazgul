@@ -19,9 +19,11 @@ test-default:
 test-serde:
     CARGO_HOME={{cargo_home}} cargo test --features serde-derive --verbose
 
-# Run no_std tests
+# Run no_std compatibility and behavior checks
 test-no-std:
     CARGO_HOME={{cargo_home}} cargo check --no-default-features --features no_std --target {{thumb_target}} --verbose
+    CARGO_HOME={{cargo_home}} cargo check --manifest-path tests/no_std_consumer/Cargo.toml --target {{thumb_target}} --verbose
+    CARGO_HOME={{cargo_home}} cargo test --no-default-features --features no_std --lib --verbose
 
 # Check formatting
 check-fmt:

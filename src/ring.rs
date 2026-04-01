@@ -510,7 +510,7 @@ fn sort_and_compress(members: Vec<RistrettoPoint>) -> SortedMembers {
     SortedMembers { compressed, points }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
     use sha2::Sha512;

@@ -19,6 +19,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: thumbv8m.main-none-eabihf
 
       - name: Install cargo-audit
         run: cargo install cargo-audit
@@ -32,8 +33,14 @@ jobs:
       - name: Run serde tests
         run: cargo test --features serde-derive --verbose
 
-      - name: Run no_std tests
-        run: cargo test --no-default-features --features no_std --verbose
+      - name: Run no_std compatibility check
+        run: cargo check --no-default-features --features no_std --target thumbv8m.main-none-eabihf --verbose
+
+      - name: Run no_std consumer check
+        run: cargo check --manifest-path tests/no_std_consumer/Cargo.toml --target thumbv8m.main-none-eabihf --verbose
+
+      - name: Run no_std behavior tests
+        run: cargo test --no-default-features --features no_std --lib --verbose
 
       - name: Check formatting
         run: cargo fmt -- --check
@@ -42,7 +49,7 @@ jobs:
         run: cargo clippy -- -D warnings
 
       - name: Run clippy on no_std
-        run: cargo clippy --no-default-features --features no_std -- -D warnings
+        run: cargo clippy --no-default-features --features no_std --target thumbv8m.main-none-eabihf -- -D warnings
 
       - name: Run clippy on serde
         run: cargo clippy --features serde-derive -- -D warnings

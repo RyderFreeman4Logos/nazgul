@@ -74,11 +74,6 @@ smallvec-responses = ["dep:smallvec"]
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
 
-[[test]]
-name = "no_std_tests"
-path = "tests/no_std_tests.rs"
-required-features = ["no_std"]
-
 [[bench]]
 name = "blsag_benches"
 harness = false

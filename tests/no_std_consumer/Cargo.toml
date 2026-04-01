@@ -1,0 +1,13 @@
+[package]
+name = "nazgul-no-std-consumer"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+curve25519-dalek = { version = "4", default-features = false }
+digest = { version = "0.10", default-features = false }
+nazgul = { path = "../..", default-features = false, features = ["no_std"] }
+rand_core = { version = "0.6.4", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+sha3 = { version = "0.10", default-features = false }
