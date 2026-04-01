@@ -37,11 +37,6 @@ use rand_core::{CryptoRng, RngCore};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
-#[cfg(all(feature = "no_std", not(feature = "std")))]
-use alloc::boxed::Box;
-#[cfg(feature = "std")]
-use std::boxed::Box;
-
 /// Errors specific to the streaming signing protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamingError {
@@ -221,11 +216,11 @@ struct Signing<H: Digest<OutputSize = U64> + Clone + Default> {
     ring_binding: RingBinding,
 }
 
-enum State<H: Digest<OutputSize = U64> + Clone + Default> {
+enum Phase {
     Idle,
-    Validating(Validating<H>),
-    Validated(Validated),
-    Signing(Box<Signing<H>>),
+    Validating,
+    Validated,
+    Signing,
     Done,
     /// Poisoned state after an error or move.
     Poisoned,
@@ -240,7 +235,10 @@ pub struct StreamingBlsagSigner<
     H: Digest<OutputSize = U64> + Clone + Default,
     R: CryptoRng + RngCore,
 > {
-    state: State<H>,
+    phase: Phase,
+    validating: Option<Validating<H>>,
+    validated: Option<Validated>,
+    signing: Option<Signing<H>>,
     rng: R,
 }
 
@@ -250,7 +248,10 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
     /// Creates a new streaming signer in the Idle state.
     pub fn new(rng: R) -> Self {
         Self {
-            state: State::Idle,
+            phase: Phase::Idle,
+            validating: None,
+            validated: None,
+            signing: None,
             rng,
         }
     }
@@ -265,20 +266,21 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         ring_len: usize,
         expected_ring_hash: RingHash,
     ) -> Result<(), StreamingError> {
-        if !matches!(self.state, State::Idle) {
+        if !matches!(self.phase, Phase::Idle) {
             return Err(StreamingError::InvalidState);
         }
         if ring_len == 0 {
             return Err(StreamingError::EmptyRing);
         }
 
-        self.state = State::Validating(Validating {
+        self.validating = Some(Validating {
             ring_len,
             expected_ring_hash,
             hasher: H::default(),
             members_seen: 0,
             ring_binding: RingBinding::new(),
         });
+        self.phase = Phase::Validating;
 
         Ok(())
     }
@@ -292,10 +294,13 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         index: usize,
         compressed: &CompressedRistretto,
     ) -> Result<StepOutput, StreamingError> {
-        let validating = match &mut self.state {
-            State::Validating(v) => v,
-            _ => return Err(StreamingError::InvalidState),
-        };
+        if !matches!(self.phase, Phase::Validating) {
+            return Err(StreamingError::InvalidState);
+        }
+        let validating = self
+            .validating
+            .as_mut()
+            .ok_or(StreamingError::InvalidState)?;
 
         // Enforce sequential order.
         if index != validating.members_seen {
@@ -324,13 +329,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
 
         // Check if validation is complete.
         if validating.members_seen == validating.ring_len {
-            // Finalize the ring hash.
-            // We need to take ownership of the validating state to finalize the hasher.
-            let old_state = core::mem::replace(&mut self.state, State::Poisoned);
-            let validating = match old_state {
-                State::Validating(v) => v,
-                _ => unreachable!(),
-            };
+            let validating = self.validating.take().ok_or(StreamingError::InvalidState)?;
 
             let output = validating.hasher.finalize();
             let mut hash_bytes = [0u8; 32];
@@ -338,14 +337,15 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             let computed_hash = RingHash(hash_bytes);
 
             if computed_hash != validating.expected_ring_hash {
-                self.state = State::Idle;
+                self.phase = Phase::Idle;
                 return Err(StreamingError::RingHashMismatch);
             }
 
-            self.state = State::Validated(Validated {
+            self.validated = Some(Validated {
                 ring_len: validating.ring_len,
                 ring_binding: validating.ring_binding,
             });
+            self.phase = Phase::Validated;
         }
 
         Ok(StepOutput::Ack)
@@ -367,17 +367,19 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         signer_pubkey_compressed: &CompressedRistretto,
         message: &[u8],
     ) -> Result<(), StreamingError> {
-        let validated = match &self.state {
-            State::Validated(v) => v,
-            State::Idle | State::Validating(_) => {
-                return Err(StreamingError::ValidationNotComplete)
-            }
-            _ => return Err(StreamingError::InvalidState),
-        };
+        if matches!(self.phase, Phase::Idle | Phase::Validating) {
+            return Err(StreamingError::ValidationNotComplete);
+        }
+        if !matches!(self.phase, Phase::Validated) {
+            return Err(StreamingError::InvalidState);
+        }
+        let validated = self.validated.take().ok_or(StreamingError::InvalidState)?;
 
         if signer_index >= validated.ring_len {
+            let expected = validated.ring_len.saturating_sub(1);
+            self.validated = Some(validated);
             return Err(StreamingError::OutOfOrder {
-                expected: validated.ring_len.saturating_sub(1),
+                expected,
                 got: signer_index,
             });
         }
@@ -391,16 +393,21 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             .unwrap_u8()
             == 0
         {
+            self.validated = Some(validated);
             return Err(StreamingError::IdentityMismatch);
         }
 
+        // Decompress the signer's public key for Hp computation.
+        let signer_pubkey = match signer_pubkey_compressed.decompress() {
+            Some(point) => point,
+            None => {
+                self.validated = Some(validated);
+                return Err(StreamingError::InvalidPoint);
+            }
+        };
+
         let ring_len = validated.ring_len;
         let expected_ring_binding = validated.ring_binding;
-
-        // Decompress the signer's public key for Hp computation.
-        let signer_pubkey = signer_pubkey_compressed
-            .decompress()
-            .ok_or(StreamingError::InvalidPoint)?;
 
         let k = SecretScalar(secret_key);
 
@@ -437,7 +444,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             Scalar::ZERO
         };
 
-        self.state = State::Signing(Box::new(Signing {
+        self.signing = Some(Signing {
             ring_len,
             signer_index,
             message_hash,
@@ -450,7 +457,8 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             sign_step: 0,
             expected_ring_binding,
             ring_binding: RingBinding::new(),
-        }));
+        });
+        self.phase = Phase::Signing;
 
         Ok(())
     }
@@ -467,11 +475,11 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         index: usize,
         compressed: &CompressedRistretto,
     ) -> Result<StepOutput, StreamingError> {
-        // We need mutable access to the signing state.
-        let signing = match &mut self.state {
-            State::Signing(s) => s.as_mut(),
-            _ => return Err(StreamingError::InvalidState),
-        };
+        if !matches!(self.phase, Phase::Signing) {
+            return Err(StreamingError::InvalidState);
+        }
+
+        let mut signing = self.signing.take().ok_or(StreamingError::InvalidState)?;
 
         let ring_len = signing.ring_len;
         let signer_index = signing.signer_index;
@@ -480,6 +488,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         // Expected index in the signing order: (pi+1+step) % N
         let expected_index = (signer_index + 1 + signing.sign_step) % ring_len;
         if index != expected_index {
+            self.signing = Some(signing);
             return Err(StreamingError::OutOfOrder {
                 expected: expected_index,
                 got: index,
@@ -487,9 +496,13 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
         }
 
         // Validate the point.
-        let point = compressed
-            .decompress()
-            .ok_or(StreamingError::InvalidPoint)?;
+        let point = match compressed.decompress() {
+            Some(point) => point,
+            None => {
+                self.signing = Some(signing);
+                return Err(StreamingError::InvalidPoint);
+            }
+        };
 
         // Accumulate into Phase 2 ring binding (order-independent).
         signing.ring_binding.accumulate::<H>(index, compressed);
@@ -500,7 +513,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             // Verify Phase 2 ring matches Phase 1 validated ring (anti-switch).
             // All N members have now been accumulated — compare the XOR accumulators.
             if signing.ring_binding != signing.expected_ring_binding {
-                self.state = State::Poisoned;
+                self.phase = Phase::Poisoned;
                 return Err(StreamingError::RingSwitchDetected);
             }
 
@@ -514,7 +527,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
                 .unwrap_u8()
                 == 0
             {
-                self.state = State::Poisoned;
+                self.phase = Phase::Poisoned;
                 return Err(StreamingError::IdentityMismatch);
             }
 
@@ -526,7 +539,7 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             let key_image = signing.key_image;
 
             // Transition to Done.
-            self.state = State::Done;
+            self.phase = Phase::Done;
 
             Ok(StepOutput::Complete {
                 c_0,
@@ -568,6 +581,8 @@ impl<H: Digest<OutputSize = U64> + Clone + Default, R: CryptoRng + RngCore>
             if index == ring_len - 1 {
                 signing.c_0 = signing.c_current;
             }
+
+            self.signing = Some(signing);
 
             Ok(StepOutput::ScalarResponse { index, s_i })
         }
