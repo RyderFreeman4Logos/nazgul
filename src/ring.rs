@@ -4,7 +4,6 @@ use crate::prelude::*;
 use core::marker::PhantomData;
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use digest::{generic_array::typenum::U64, Digest};
-use sha3::Sha3_512;
 
 /// A strongly-typed wrapper for a 32-byte canonical hash of a Ring.
 ///
@@ -12,7 +11,7 @@ use sha3::Sha3_512;
 /// the API used to compute it:
 ///
 /// - [`Ring::canonical_hash`](crate::ring::Ring::canonical_hash) uses the
-///   backwards-compatible default of SHA3-512 truncated to 32 bytes.
+///   default BLAKE3 digest.
 /// - [`Ring::canonical_hash_with`](crate::ring::Ring::canonical_hash_with)
 ///   derives the hash from the caller-chosen digest `H`, truncated to 32 bytes.
 ///
@@ -71,10 +70,13 @@ impl RingHash {
         Self(bytes)
     }
 
-    /// Computes a canonical `RingHash` using the backwards-compatible default
-    /// digest suite (SHA3-512 truncated to 32 bytes).
+    /// Computes a canonical `RingHash` using the default BLAKE3 digest.
     pub(crate) fn from_compressed_members(members: &[CompressedRistretto]) -> Self {
-        Self::from_compressed_members_with::<Sha3_512>(members)
+        let mut hasher = blake3::Hasher::new();
+        for member in members {
+            hasher.update(member.as_bytes());
+        }
+        Self(*hasher.finalize().as_bytes())
     }
 }
 
@@ -96,8 +98,7 @@ pub enum RingContext {
 
 impl RingContext {
     /// Returns the canonical hash associated with this context using the
-    /// backwards-compatible default digest suite (SHA3-512 truncated to 32
-    /// bytes for archival contexts).
+    /// default BLAKE3 digest for archival contexts.
     ///
     /// If `Compact`, returns the stored hash.
     /// If `Archival`, computes the canonical hash of the stored ring with the
@@ -368,8 +369,8 @@ impl Ring {
 
     /// Computes the canonical hash of this ring.
     ///
-    /// Uses SHA3-512 (truncated to 32 bytes) as the backwards-compatible default
-    /// digest. For algorithm-aligned workflows such as multi-suite hardware keys,
+    /// Uses BLAKE3 as the default digest. For algorithm-aligned workflows such as
+    /// multi-suite hardware keys,
     /// prefer [`canonical_hash_with`](Self::canonical_hash_with).
     ///
     /// Since `Ring` guarantees its members are sorted, this hash is deterministic
@@ -603,10 +604,10 @@ mod tests {
     }
 
     #[test]
-    fn canonical_hash_default_matches_sha3_suite() {
+    fn canonical_hash_default_differs_from_sha3_suite() {
         let ring = Ring::new(sample_points());
 
-        assert_eq!(
+        assert_ne!(
             ring.canonical_hash(),
             ring.canonical_hash_with::<Sha3_512>()
         );

@@ -57,7 +57,7 @@ pub struct ContextualRingContext<'a> {
 }
 
 impl<'a> ContextualRingContext<'a> {
-    /// Returns the backwards-compatible default lookup hash.
+    /// Returns the default BLAKE3 lookup hash.
     pub fn canonical_hash(&self) -> RingHash {
         self.raw.canonical_hash()
     }
@@ -128,7 +128,7 @@ impl ContextualBLSAG {
 
     /// Returns the raw stored ring context.
     ///
-    /// Compact contextual signatures store the backwards-compatible lookup hash
+    /// Compact contextual signatures store the default lookup hash
     /// here. Use [`context`](Self::context) when you need suite-aware hash
     /// semantics for compact signatures.
     pub fn context_ref(&self) -> &RingContext {
@@ -151,7 +151,7 @@ impl ContextualBLSAG {
     /// Stores the Ring's default canonical lookup hash plus compact metadata
     /// for the selected digest suite. Use this when you expect the verifier to
     /// have access to the Ring definition. The BLSAG mathematics follow `H`
-    /// while the compact lookup key stays on the backwards-compatible default
+    /// while the compact lookup key stays on the default BLAKE3
     /// digest. Accepts an external `rng` source for embedded/hardware TRNG
     /// support.
     pub fn sign_compact_with_rng<

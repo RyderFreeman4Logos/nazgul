@@ -164,7 +164,7 @@ mod test {
 
     #[test]
     fn test_keypair_new() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let secret = Scalar::random(&mut csprng);
         let keypair = KeyPair::new(secret);
         assert_eq!(keypair.secret(), Some(&secret));
@@ -173,7 +173,7 @@ mod test {
 
     #[test]
     fn test_keypair_from_public_key_only() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let secret = Scalar::random(&mut csprng);
         let public = secret.compute_pubkey();
         let keypair = KeyPair::from_public_key_only(public);
@@ -183,7 +183,7 @@ mod test {
 
     #[test]
     fn test_keypair_generate() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let keypair = KeyPair::generate(&mut csprng);
         assert_eq!(
             keypair.public(),
@@ -193,7 +193,7 @@ mod test {
 
     #[test]
     fn test_keypair_into_keys() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let secret = Scalar::random(&mut csprng);
         let keypair = KeyPair::new(secret);
         let (s, p) = keypair.into_keys();
@@ -203,7 +203,7 @@ mod test {
 
     #[test]
     fn test_keypair_byte_conversion() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let original_keypair = KeyPair::generate(&mut csprng);
         let bytes = original_keypair.to_bytes();
         let recovered_keypair = KeyPair::from_bytes(&bytes).unwrap();
@@ -213,7 +213,7 @@ mod test {
     #[test]
     #[should_panic(expected = "Cannot convert public-only KeyPair to secret bytes")]
     fn test_keypair_public_only_to_bytes_panic() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let secret = Scalar::random(&mut csprng);
         let public = secret.compute_pubkey();
         let keypair = KeyPair::from_public_key_only(public);
@@ -222,7 +222,7 @@ mod test {
 
     #[test]
     fn test_keypair_base58_conversion() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let original_keypair = KeyPair::generate(&mut csprng);
         let base58_str = original_keypair.to_base58();
         let recovered_keypair = KeyPair::from_base58(base58_str).unwrap();
@@ -238,7 +238,7 @@ mod test {
 
     #[test]
     fn test_keypair_debug_format() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let keypair = KeyPair::generate(&mut csprng);
         let debug_str = format!("{:?}", keypair);
         assert!(debug_str.contains("public"));
@@ -252,7 +252,7 @@ mod test {
 
     #[test]
     fn test_keypair_derivation() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let master_keypair = KeyPair::generate(&mut csprng);
         let derivation_data = b"my derivation path";
 
@@ -280,7 +280,7 @@ mod test {
 
     #[test]
     fn test_public_only_derivation() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let master_secret = Scalar::random(&mut csprng);
         let master_public = master_secret.compute_pubkey();
 

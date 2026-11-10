@@ -21,7 +21,7 @@ fn test_sag_no_std() {
     let ring: Vec<RistrettoPoint> = (0..(n - 1))
         .map(|_| RistrettoPoint::random(&mut csprng))
         .collect();
-    let message: Vec<u8> = b"This is the message".iter().cloned().collect();
+    let message: Vec<u8> = b"This is the message".to_vec();
 
     let signature = SAG::sign::<Sha512, OsRng>(k, ring.clone(), secret_index, &message);
     let result = SAG::verify::<Sha512>(signature, &message);
@@ -39,13 +39,13 @@ fn test_blsag_no_std() {
         .collect();
     public_keys.push(k_point);
     let ring = Ring::new(public_keys);
-    let message: Vec<u8> = b"This is the message".iter().cloned().collect();
+    let message: Vec<u8> = b"This is the message".to_vec();
 
     let signature = BLSAG::sign::<Sha512, OsRng>(k, &ring, None, &message).unwrap();
     let result = BLSAG::verify::<Sha512>(&signature, &ring, None, &message);
     assert!(result);
 
-    let another_message: Vec<u8> = b"This is another message".iter().cloned().collect();
+    let another_message: Vec<u8> = b"This is another message".to_vec();
     let signature2 = BLSAG::sign::<Sha512, OsRng>(k, &ring, None, &another_message).unwrap();
     let link_result = BLSAG::link(&signature, &signature2);
     assert!(link_result);
@@ -65,13 +65,13 @@ fn test_clsag_no_std() {
                 .collect()
         })
         .collect();
-    let message: Vec<u8> = b"This is the message".iter().cloned().collect();
+    let message: Vec<u8> = b"This is the message".to_vec();
 
     let signature = CLSAG::sign::<Sha512, OsRng>(ks.clone(), ring.clone(), secret_index, &message);
     let result = CLSAG::verify::<Sha512>(signature.clone(), &message);
     assert!(result);
 
-    let another_message: Vec<u8> = b"This is another message".iter().cloned().collect();
+    let another_message: Vec<u8> = b"This is another message".to_vec();
     let signature2 = CLSAG::sign::<Sha512, OsRng>(ks, ring.clone(), secret_index, &another_message);
     let link_result = CLSAG::link(signature, signature2);
     assert!(link_result);
@@ -91,13 +91,13 @@ fn test_mlsag_no_std() {
                 .collect()
         })
         .collect();
-    let message: Vec<u8> = b"This is the message".iter().cloned().collect();
+    let message: Vec<u8> = b"This is the message".to_vec();
 
     let signature = MLSAG::sign::<Sha512, OsRng>(ks.clone(), ring.clone(), secret_index, &message);
     let result = MLSAG::verify::<Sha512>(signature.clone(), &message);
     assert!(result);
 
-    let another_message: Vec<u8> = b"This is another message".iter().cloned().collect();
+    let another_message: Vec<u8> = b"This is another message".to_vec();
     let signature2 = MLSAG::sign::<Sha512, OsRng>(ks, ring.clone(), secret_index, &another_message);
     let link_result = MLSAG::link(signature, signature2);
     assert!(link_result);

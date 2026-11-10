@@ -383,7 +383,7 @@ fn verify_fails_with_tampered_response() {
 
     // Tamper: mutate one response scalar
     let mut tampered_responses = signature.responses().to_vec();
-    tampered_responses[1] = tampered_responses[1] + Scalar::ONE;
+    tampered_responses[1] += Scalar::ONE;
 
     let tampered = BLSAG::from_parts(
         *signature.challenge(),

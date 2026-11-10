@@ -1,3 +1,11 @@
+## Unreleased — Default canonical ring hash
+
+* **Breaking:** `Ring::canonical_hash()` now uses BLAKE3-32 over sorted compressed
+  members, changing existing default ring identifiers from truncated SHA3-512.
+* Explicit `canonical_hash_with::<H>()`, prepared rings, and streaming validation
+  continue to use the selected digest `H`. PoW retains Keccak512.
+* The `blake3` feature exposes the digest adapter; the core dependency is unconditional.
+
 ## Phase 0 — Breaking Changes
 
 Summary of all breaking changes introduced during Phase 0 development.

@@ -37,3 +37,12 @@ All tests and compatibility checks are run automatically on pull requests and co
 - API docs: [docs.rs/nazgul](https://docs.rs/nazgul/latest/nazgul/)
 - [Native performance guide](docs/performance.md)
 - [WASM build guide](docs/WASM.md)
+
+### Canonical ring hash
+
+`Ring::canonical_hash()` uses the 32-byte BLAKE3 hash of the sorted, concatenated
+compressed member encodings. This changes all default ring identifiers from the
+previous truncated SHA3-512 values. `canonical_hash_with::<H>()`, prepared rings,
+and streaming validation retain the explicitly selected digest `H`; pass that
+suite-specific hash to streaming validation. The optional `blake3` feature still
+exposes the `Blake3_512` digest adapter. PoW retains its separate Keccak512 domain.

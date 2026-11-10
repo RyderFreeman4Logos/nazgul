@@ -84,7 +84,10 @@ Different hash implementations have different SIMD acceleration profiles:
 
 Enable with `cargo build --features blake3`. The `Blake3_512` wrapper uses
 BLAKE3's XOF mode to produce 64-byte output suitable for
-`Digest<OutputSize = U64>`. BLAKE3 is not included in default features.
+`Digest<OutputSize = U64>`. This feature exposes the optional digest adapter.
+The core BLAKE3 dependency is always available with its default features disabled:
+`Ring::canonical_hash()` uses native BLAKE3-32 independently of this adapter.
+Explicit `canonical_hash_with::<H>()` and streaming validation continue to use `H`.
 
 ```rust
 use nazgul::blake3_compat::Blake3_512;
