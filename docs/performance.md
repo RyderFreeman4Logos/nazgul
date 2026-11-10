@@ -203,3 +203,31 @@ function (via `PhantomData<H>`). Passing it to a different ring causes
 `sign_with_rng` to return `Err(SignatureError::RingMismatch)` and `verify`
 to return `false`. Attempting to use `PreparedRing<Sha512>` with
 `verify::<Blake2b512>()` is a compile error.
+
+## Streaming Signer Object Size
+
+The signer stores mutually exclusive phase payloads in one inline enum. Validation
+and signing digest caches overlap in that storage; the public key image stays outside it
+to avoid both a large variant gap and repeated point decompression. Secret scalars
+remain owned by the signing payload and are zeroized when it is dropped on
+completion, poisoning, or cancellation. The digest cache is released on terminal
+transitions too.
+
+Measured on x86_64 with Rust 1.99.1 (bytes):
+
+| Digest | Old / new with OsRng | Old / new with ChaCha20Rng | Full inline-enum prototype, excluding RNG |
+|---|---:|---:|---:|
+| SHA-512 | 1168 / 720 | 1488 / 1040 | 720 |
+| SHA3-512 | 1264 / 768 | 1584 / 1088 | 768 |
+| BLAKE3-512 | 4512 / 2392 | 4832 / 2720 | 2392 |
+
+The prototype used the original payload types in a single inline enum. The new
+OsRng objects match that prototype exactly; ChaCha20Rng can add alignment padding.
+This avoids allocation and Clippy large-enum-variant suppression. Regression tests bound the
+signer's storage to `size_of::<H>() + size_of::<R>() + 512` bytes for these suites.
+The thumb no_std consumer also checks this budget at compile time for SHA-512 and
+SHA3-512. The budget measures the signer object, not total call-stack peak usage;
+local cryptographic temporaries and the caller's stack remain additional costs.
+Allocation probes exercise both successful and poisoned streaming paths. Lifecycle
+tests observe both secret scalars already zeroed at destruction, including drop
+of an active signer; recoverable errors retain the state for retry.

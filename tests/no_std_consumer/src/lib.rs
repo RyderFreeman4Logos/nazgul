@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use curve25519_dalek::scalar::Scalar;
 use digest::Digest;
-use nazgul::blsag::{streaming::StreamingBlsagSigner, BLSAG, ContextualBLSAG};
+use nazgul::blsag::{streaming::StreamingBlsagSigner, ContextualBLSAG, BLSAG};
 use nazgul::ring::Ring;
 use rand_core::{CryptoRng, RngCore};
 use sha3::Sha3_512;
@@ -45,7 +45,9 @@ pub fn build_streaming_signer() -> StreamingBlsagSigner<Sha3_512, ZeroRng> {
     StreamingBlsagSigner::new(ZeroRng)
 }
 
-pub fn canonical_hash_with<H: Digest<OutputSize = digest::generic_array::typenum::U64> + Clone + Default>(
+pub fn canonical_hash_with<
+    H: Digest<OutputSize = digest::generic_array::typenum::U64> + Clone + Default,
+>(
     ring: &Ring,
 ) -> [u8; 32] {
     ring.canonical_hash_with::<H>().0
@@ -63,3 +65,13 @@ pub fn make_fake_contextual_signature(ring: &Ring) -> ContextualBLSAG {
 pub fn compressed_identity() -> CompressedRistretto {
     (Scalar::ONE * curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT).compress()
 }
+
+// Compile-time object-size budgets also apply on the actual thumb consumer target.
+const _: () = assert!(
+    core::mem::size_of::<StreamingBlsagSigner<Sha3_512, ZeroRng>>()
+        <= core::mem::size_of::<Sha3_512>() + 512
+);
+const _: () = assert!(
+    core::mem::size_of::<StreamingBlsagSigner<sha2::Sha512, ZeroRng>>()
+        <= core::mem::size_of::<sha2::Sha512>() + 512
+);
