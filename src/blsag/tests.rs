@@ -23,7 +23,7 @@ use sha3::Keccak512;
 
 #[test]
 fn blsag() {
-    let mut csprng = OsRng::default();
+    let mut csprng = OsRng;
     let k: Scalar = Scalar::random(&mut csprng);
     let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
     let n = 2;
@@ -32,7 +32,7 @@ fn blsag() {
         .collect();
     public_keys.push(k_point);
     let ring = Ring::new(public_keys);
-    let message: Vec<u8> = b"This is the message".iter().cloned().collect();
+    let message: Vec<u8> = b"This is the message".to_vec();
 
     {
         let signature = BLSAG::sign::<Sha512, OsRng>(k, &ring, None, &message).unwrap();
@@ -57,7 +57,7 @@ fn blsag() {
         .collect();
     another_public_keys.push(k_point);
     let another_ring = Ring::new(another_public_keys);
-    let another_message: Vec<u8> = b"This is another message".iter().cloned().collect();
+    let another_message: Vec<u8> = b"This is another message".to_vec();
     let signature_1 =
         BLSAG::sign::<Blake2b512, OsRng>(k, &another_ring, None, &another_message).unwrap();
     let signature_2 = BLSAG::sign::<Blake2b512, OsRng>(k, &ring, None, &message).unwrap();
@@ -67,7 +67,7 @@ fn blsag() {
 
 #[test]
 fn blsag_debug() {
-    let mut csprng = OsRng::default();
+    let mut csprng = OsRng;
     let k: Scalar = Scalar::random(&mut csprng);
     let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
     let n = 2;
@@ -76,7 +76,7 @@ fn blsag_debug() {
         .collect();
     public_keys.push(k_point);
     let ring = Ring::new(public_keys);
-    let message: Vec<u8> = b"This is the message".iter().cloned().collect();
+    let message: Vec<u8> = b"This is the message".to_vec();
 
     let signature = BLSAG::sign::<Sha512, OsRng>(k, &ring, None, &message).unwrap();
     // The following line will fail to compile if Debug is not implemented for BLSAG.
@@ -86,7 +86,7 @@ fn blsag_debug() {
 #[test]
 fn blsag_verify_rejects_mismatched_ring_len() {
     // Prepare basic materials
-    let mut csprng = OsRng::default();
+    let mut csprng = OsRng;
     let k: Scalar = Scalar::random(&mut csprng);
     let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
     let n = 3usize;
@@ -114,7 +114,7 @@ fn blsag_verify_rejects_mismatched_ring_len() {
 
 #[test]
 fn blsag_sign_rejects_mismatched_precomputed_ring() {
-    let mut csprng = OsRng::default();
+    let mut csprng = OsRng;
     let k: Scalar = Scalar::random(&mut csprng);
     let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
 
@@ -214,7 +214,7 @@ fn blsag_optimized_msm_cross_validation() {
 
 #[test]
 fn blsag_verify_rejects_mismatched_precomputed_len() {
-    let mut csprng = OsRng::default();
+    let mut csprng = OsRng;
     let k: Scalar = Scalar::random(&mut csprng);
     let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
 
@@ -240,7 +240,7 @@ fn blsag_verify_rejects_mismatched_precomputed_len() {
 
 #[test]
 fn blsag_precomputed_sign_verify_roundtrip() {
-    let mut csprng = OsRng::default();
+    let mut csprng = OsRng;
     let k: Scalar = Scalar::random(&mut csprng);
     let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
     let n = 5;
@@ -259,7 +259,7 @@ fn blsag_precomputed_sign_verify_roundtrip() {
 
 #[test]
 fn blsag_precomputed_with_ring_data() {
-    let mut csprng = OsRng::default();
+    let mut csprng = OsRng;
     let k: Scalar = Scalar::random(&mut csprng);
     let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
     let n = 4;
@@ -288,7 +288,7 @@ fn blsag_precomputed_with_ring_data() {
 
 #[test]
 fn blsag_precomputed_rejects_ring_mismatch() {
-    let mut csprng = OsRng::default();
+    let mut csprng = OsRng;
     let k: Scalar = Scalar::random(&mut csprng);
     let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
 
@@ -315,7 +315,7 @@ fn blsag_precomputed_rejects_ring_mismatch() {
 
 #[test]
 fn blsag_precomputed_linkability() {
-    let mut csprng = OsRng::default();
+    let mut csprng = OsRng;
     let k: Scalar = Scalar::random(&mut csprng);
     let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
 
@@ -346,7 +346,7 @@ fn blsag_precomputed_linkability() {
 fn blsag_progress_callback_fires_during_sign_and_verify() {
     use core::cell::Cell;
 
-    let mut csprng = OsRng::default();
+    let mut csprng = OsRng;
     let k: Scalar = Scalar::random(&mut csprng);
     let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
     let n = 20;
@@ -410,7 +410,7 @@ fn blsag_progress_callback_fires_during_sign_and_verify() {
 
 #[test]
 fn blsag_sign_rejects_compressed_ring() {
-    let mut csprng = OsRng::default();
+    let mut csprng = OsRng;
     let k: Scalar = Scalar::random(&mut csprng);
     let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
 
@@ -430,7 +430,7 @@ fn blsag_sign_rejects_compressed_ring() {
 
 #[test]
 fn blsag_verify_rejects_compressed_ring() {
-    let mut csprng = OsRng::default();
+    let mut csprng = OsRng;
     let k: Scalar = Scalar::random(&mut csprng);
     let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
 
@@ -453,7 +453,7 @@ fn blsag_verify_rejects_compressed_ring() {
 
 #[test]
 fn blsag_precompute_signing_rejects_compressed_ring() {
-    let mut csprng = OsRng::default();
+    let mut csprng = OsRng;
     let k: Scalar = Scalar::random(&mut csprng);
     let k_point: RistrettoPoint = k * constants::RISTRETTO_BASEPOINT_POINT;
 

@@ -367,7 +367,7 @@ mod test {
 
     #[test]
     fn clsag() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
 
         let secret_index = 1;
         let nr = 2;
@@ -383,7 +383,7 @@ mod test {
                     .collect()
             })
             .collect();
-        let message: Vec<u8> = b"This is the message".iter().cloned().collect();
+        let message: Vec<u8> = b"This is the message".to_vec();
 
         {
             let signature =
@@ -413,7 +413,7 @@ mod test {
                     .collect()
             })
             .collect();
-        let another_message: Vec<u8> = b"This is another message".iter().cloned().collect();
+        let another_message: Vec<u8> = b"This is another message".to_vec();
         let signature_1 = CLSAG::sign::<Blake2b512, OsRng>(
             ks.clone(),
             another_ring.clone(),

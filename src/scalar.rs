@@ -122,7 +122,7 @@ mod test {
 
     #[test]
     fn test_ristretto_point_byte_conversion() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let original_point = RistrettoPoint::random(&mut csprng);
         let bytes = original_point.to_bytes();
         let recovered_point = RistrettoPoint::from_bytes(&bytes).unwrap();
@@ -131,7 +131,7 @@ mod test {
 
     #[test]
     fn test_ristretto_point_base58_conversion() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let original_point = RistrettoPoint::random(&mut csprng);
         let base58_str = original_point.to_base58();
         let recovered_point = RistrettoPoint::from_base58(base58_str).unwrap();
@@ -148,7 +148,7 @@ mod test {
 
     #[test]
     fn test_scalar_byte_conversion() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let original_scalar = Scalar::random(&mut csprng);
         let bytes = original_scalar.to_bytes();
         let recovered_scalar = Scalar::from_bytes(&bytes).unwrap();
@@ -157,7 +157,7 @@ mod test {
 
     #[test]
     fn test_scalar_base58_conversion() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let original_scalar = Scalar::random(&mut csprng);
         let base58_str = original_scalar.to_base58();
         let recovered_scalar = Scalar::from_base58(base58_str).unwrap();
@@ -182,7 +182,7 @@ mod test {
 
     #[test]
     fn test_pubkey_computation() {
-        let mut csprng = OsRng::default();
+        let mut csprng = OsRng;
         let secret = Scalar::random(&mut csprng);
         let public = secret.compute_pubkey();
         assert_eq!(public, secret * RISTRETTO_BASEPOINT_POINT);

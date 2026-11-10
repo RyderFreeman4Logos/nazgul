@@ -24,7 +24,7 @@ fn test_sag_serde() {
     let ring: Vec<RistrettoPoint> = (0..(n - 1))
         .map(|_| RistrettoPoint::random(&mut csprng))
         .collect();
-    let message: Vec<u8> = b"This is the message".iter().cloned().collect();
+    let message: Vec<u8> = b"This is the message".to_vec();
 
     let signature = SAG::sign::<Sha512, OsRng>(k, ring.clone(), secret_index, &message);
 
@@ -50,7 +50,7 @@ fn test_blsag_serde() {
         .collect();
     public_keys.push(k_point);
     let ring = Ring::new(public_keys);
-    let message: Vec<u8> = b"This is the message".iter().cloned().collect();
+    let message: Vec<u8> = b"This is the message".to_vec();
 
     let signature = BLSAG::sign::<Sha512, OsRng>(k, &ring, None, &message).unwrap();
 
@@ -75,7 +75,7 @@ fn test_clsag_serde() {
                 .collect()
         })
         .collect();
-    let message: Vec<u8> = b"This is the message".iter().cloned().collect();
+    let message: Vec<u8> = b"This is the message".to_vec();
 
     let signature = CLSAG::sign::<Sha512, OsRng>(ks.clone(), ring.clone(), secret_index, &message);
 
@@ -100,7 +100,7 @@ fn test_mlsag_serde() {
                 .collect()
         })
         .collect();
-    let message: Vec<u8> = b"This is the message".iter().cloned().collect();
+    let message: Vec<u8> = b"This is the message".to_vec();
 
     let signature = MLSAG::sign::<Sha512, OsRng>(ks.clone(), ring.clone(), secret_index, &message);
 

@@ -151,7 +151,7 @@ mod test {
 
         #[test]
         fn sag() {
-            let mut csprng = OsRng::default();
+            let mut csprng = OsRng;
             let k: Scalar = Scalar::random(&mut csprng);
             let secret_index = 1;
             let n = 2;
@@ -159,7 +159,7 @@ mod test {
                 (0..(n - 1)) // Prover is going to add our key into this mix
                     .map(|_| RistrettoPoint::random(&mut csprng))
                     .collect();
-            let message: Vec<u8> = b"This is the message".iter().cloned().collect();
+            let message: Vec<u8> = b"This is the message".to_vec();
 
             {
                 let signature = SAG::sign::<Sha512, OsRng>(k, ring.clone(), secret_index, &message);
