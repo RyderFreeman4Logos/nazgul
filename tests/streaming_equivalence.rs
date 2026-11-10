@@ -320,3 +320,102 @@ fn default_hash_agrees_with_blake3_streaming_validation() {
         signer.validate_member(index, member).unwrap();
     }
 }
+
+fn assert_state_footprint<H: Digest<OutputSize = U64> + Clone + Default>(suite: &str) {
+    use core::mem::size_of;
+    use rand::rngs::OsRng;
+    let hash = size_of::<H>();
+    let os = size_of::<StreamingBlsagSigner<H, OsRng>>();
+    let chacha = size_of::<StreamingBlsagSigner<H, ChaCha20Rng>>();
+    let random = size_of::<ChaCha20Rng>();
+    println!(
+        "FOOTPRINT suite={suite} rng=os actual={os} hash={hash} random=0 overhead={}",
+        os - hash
+    );
+    println!("FOOTPRINT suite={suite} rng=chacha20 actual={chacha} hash={hash} random={random} overhead={}", chacha - hash - random);
+    // Bound phase storage independently of the selected digest and RNG sizes.
+    // This is an object-size budget, not a whole-call-stack measurement.
+    assert!(
+        os <= hash + 512,
+        "{suite}: phase overhead exceeds 512 bytes"
+    );
+    assert!(
+        chacha <= hash + random + 512,
+        "{suite}: phase overhead exceeds 512 bytes"
+    );
+}
+
+#[test]
+fn streaming_state_footprint_budget() {
+    assert_state_footprint::<Sha512>("sha512");
+    assert_state_footprint::<Sha3_512>("sha3_512");
+    #[cfg(feature = "blake3")]
+    assert_state_footprint::<Blake3_512>("blake3_512");
+}
+
+#[path = "support/tracked_alloc.rs"]
+mod tracked_alloc;
+
+#[global_allocator]
+static ALLOCATOR: tracked_alloc::TrackingAllocator = tracked_alloc::TrackingAllocator;
+
+fn assert_streaming_no_allocations<H: Digest<OutputSize = U64> + Clone + Default>() {
+    use nazgul::blsag::streaming::StreamingError;
+    for corrupt in [false, true] {
+        let public = RISTRETTO_BASEPOINT_POINT;
+        let ring = Ring::new(vec![public, Scalar::from(2u64) * public]);
+        let index = ring
+            .compressed_members()
+            .iter()
+            .position(|point| *point == public.compress())
+            .unwrap();
+        let hash = ring.canonical_hash_with::<H>();
+        let replacement = (Scalar::from(3u64) * public).compress();
+        tracked_alloc::assert_no_allocations(|| {
+            let mut signer = StreamingBlsagSigner::<H, _>::new(ChaCha20Rng::from_seed([23; 32]));
+            signer.init_validation(ring.len(), hash).unwrap();
+            for (i, point) in ring.compressed_members().iter().enumerate() {
+                signer.validate_member(i, point).unwrap();
+            }
+            signer
+                .init_signing(
+                    index,
+                    Scalar::ONE,
+                    &public.compress(),
+                    b"allocator-free protocol",
+                )
+                .unwrap();
+            for step in 0..ring.len() {
+                let current = (index + 1 + step) % ring.len();
+                let point = if corrupt && step == 0 {
+                    &replacement
+                } else {
+                    &ring.compressed_members()[current]
+                };
+                let result = signer.sign_member(current, point);
+                if corrupt && step == ring.len() - 1 {
+                    assert!(matches!(result, Err(StreamingError::RingSwitchDetected)));
+                } else {
+                    assert!(result.is_ok());
+                }
+            }
+            drop(signer);
+        });
+    }
+}
+
+#[test]
+fn streaming_success_and_poison_are_allocator_free() {
+    assert_streaming_no_allocations::<Sha512>();
+    assert_streaming_no_allocations::<Sha3_512>();
+    #[cfg(feature = "blake3")]
+    assert_streaming_no_allocations::<Blake3_512>();
+}
+
+#[test]
+#[should_panic(expected = "streaming path allocated from the heap")]
+fn allocation_probe_rejects_real_heap_allocation() {
+    tracked_alloc::assert_no_allocations(|| {
+        std::hint::black_box(Vec::<u8>::with_capacity(64));
+    });
+}
