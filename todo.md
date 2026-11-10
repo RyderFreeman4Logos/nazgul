@@ -1,5 +1,8 @@
 # Hash Security Hardening — Issues #20-#23
 
+> Historical v3 plan: #46 supersedes only the optional-dependency requirement below.
+> BLAKE3 is now the unconditional default ring hash; its digest adapter remains opt-in.
+
 Version bump: 2.1.0 → 3.0.0 (breaking: domain separation + PreparedRing<H>)
 
 ## Debate Consensus (CSA Session 01KKV1G2XD11FKBX6F4JDRM1R7)

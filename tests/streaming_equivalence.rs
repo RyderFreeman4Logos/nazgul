@@ -293,3 +293,30 @@ fn test_streaming_validation_rejects_hash_suite_mismatch() {
         }
     }
 }
+
+#[cfg(feature = "blake3")]
+#[test]
+fn default_hash_agrees_with_blake3_streaming_validation() {
+    use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
+    use curve25519_dalek::scalar::Scalar;
+    use nazgul::blake3_compat::Blake3_512;
+    use nazgul::blsag::streaming::StreamingBlsagSigner;
+    use rand_core::SeedableRng;
+
+    let ring = Ring::new(vec![
+        RISTRETTO_BASEPOINT_POINT,
+        Scalar::from(2u64) * RISTRETTO_BASEPOINT_POINT,
+    ]);
+    assert_eq!(
+        ring.canonical_hash(),
+        ring.canonical_hash_with::<Blake3_512>()
+    );
+    let mut signer =
+        StreamingBlsagSigner::<Blake3_512, _>::new(rand_chacha::ChaCha20Rng::from_seed([1; 32]));
+    signer
+        .init_validation(ring.len(), ring.canonical_hash())
+        .unwrap();
+    for (index, member) in ring.compressed_members().iter().enumerate() {
+        signer.validate_member(index, member).unwrap();
+    }
+}
