@@ -28,6 +28,7 @@ _ITERATIONS = 120
 _LIMIT = 128 * 1024
 _SECRET_LIMIT = 64 * 1024
 _COUNTS = {"opt-like": 60, "opt-unlike": 20, "opt-abstain": 20}
+_CHECKOUT = Path(__file__).resolve().parents[2]
 
 
 class AnswerError(ValueError):
@@ -172,8 +173,11 @@ def _seal(
     recipient = public / "recipient.txt"
     if any(os.path.lexists(path) for path in (backup, envelope, recipient)):
         raise AnswerError("A seal artifact already exists.")
-    if secret_path.resolve(strict=True).is_relative_to(public):
-        raise AnswerError("The source secret must be outside the public directory.")
+    source = secret_path.resolve(strict=True)
+    if source.is_relative_to(public) or source.is_relative_to(_CHECKOUT):
+        raise AnswerError(
+            "The source secret must be outside the public directory and checkout."
+        )
     secret = _read(secret_path, _SECRET_LIMIT)
     if not secret:
         raise AnswerError("Secret must contain at least one byte.")
@@ -223,9 +227,12 @@ def main() -> int:
                 else _read(args.answer, _LIMIT)
             )
             if args.command == "open":
-                if args.output.resolve().is_relative_to(args.public.resolve()):
+                output = args.output.resolve()
+                if output.is_relative_to(
+                    args.public.resolve()
+                ) or output.is_relative_to(_CHECKOUT):
                     raise AnswerError(
-                        "Write the plaintext outside the public directory."
+                        "Write the plaintext outside the public directory and checkout."
                     )
                 if os.path.lexists(args.output):
                     raise AnswerError("Output file already exists.")

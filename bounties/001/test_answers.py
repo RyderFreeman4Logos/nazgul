@@ -104,6 +104,30 @@ class AnswerTests(unittest.TestCase):
                 self.seal()
             self.assertFalse((self.public / "secret.age").exists())
 
+    def test_checkout_source_secret_rejected(self) -> None:
+        checkout = Path(answers.__file__).resolve().parents[2]
+        with self.assertRaisesRegex(answers.AnswerError, "checkout"):
+            answers._seal(
+                self.public,
+                self.private,
+                self.recipient,
+                self.correct,
+                checkout / "Cargo.toml",
+            )
+
+    def test_checkout_output_rejected(self) -> None:
+        checkout = Path(answers.__file__).resolve().parents[2]
+        answer = self.private / "answer.csv"
+        answer.write_bytes(self.correct)
+        output = checkout / f".nazgul-bounty-test-{os.getpid()}.bin"
+        self.assertFalse(output.exists())
+        args = ["answers.py", "open", str(self.public), str(answer), str(output)]
+        error = io.StringIO()
+        with patch("sys.argv", args), redirect_stderr(error):
+            self.assertEqual(answers.main(), 1)
+        self.assertIn("checkout", error.getvalue())
+        self.assertFalse(output.exists())
+
     def test_validation_and_no_overwrite(self) -> None:
         for rows in (
             self.rows[:-1],

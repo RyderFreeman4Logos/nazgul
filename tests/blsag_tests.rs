@@ -84,6 +84,34 @@ fn deserialized_precomputation_cannot_change_key_image_domain() {
         let precomputed: PreparedRing<Sha512> = serde_json::from_value(serialized).unwrap();
         assert!(!precomputed.verify(&ring));
 
+        let mut rng = OsRng;
+        assert!(matches!(
+            BLSAG::sign_with_rng::<Sha512, _>(secret, &ring, Some(&precomputed), MESSAGE, &mut rng,),
+            Err(SignatureError::InvalidPrecomputedData)
+        ));
+        assert!(matches!(
+            BLSAG::precompute_signing::<Sha512, _>(secret, &ring, Some(&precomputed), &mut rng,),
+            Err(SignatureError::InvalidPrecomputedData)
+        ));
+        let ticket = BLSAG::precompute_signing::<Sha512, _>(secret, &ring, None, &mut rng).unwrap();
+        assert!(matches!(
+            BLSAG::sign_precomputed::<Sha512>(ticket, &ring, Some(&precomputed), MESSAGE),
+            Err(SignatureError::InvalidPrecomputedData)
+        ));
+
+        #[cfg(feature = "progress-callback")]
+        assert!(matches!(
+            BLSAG::sign_with_rng_and_progress::<Sha512, _>(
+                secret,
+                &ring,
+                Some(&precomputed),
+                MESSAGE,
+                &mut rng,
+                |_, _| panic!("invalid cache must not report signing progress"),
+            ),
+            Err(SignatureError::InvalidPrecomputedData)
+        ));
+
         let challenge = Scalar::from_hash(
             Sha512::new()
                 .chain_update(b"nazgul-chal-v3")
@@ -100,6 +128,14 @@ fn deserialized_precomputation_cannot_change_key_image_domain() {
             MESSAGE,
         ));
         assert!(!BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE));
+        #[cfg(feature = "progress-callback")]
+        assert!(!BLSAG::verify_with_progress::<Sha512>(
+            &signature,
+            &ring,
+            Some(&precomputed),
+            MESSAGE,
+            |_, _| panic!("invalid cache must not report verification progress"),
+        ));
         signature
     };
 
