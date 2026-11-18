@@ -1,0 +1,20 @@
+# Nazgul feature verification
+
+Run `just bounty-features` from the source checkout. The signed ballot fixture checks one end-to-end use of Nazgul. This command exercises the additional library paths present at base revision `307e764`.
+
+Use Linux, the project's Rust toolchain, the `thumbv8m.main-none-eabihf` and `wasm32-unknown-unknown` Rust targets, Node.js 22 or newer, and a `wasm-bindgen` CLI matching the resolved Cargo dependency. Set `BOUNTY_WASM_BINDGEN` to select a matching executable. Fresh JS glue is generated inside the Cargo build directory.
+
+| Capability | What the gate checks |
+| --- | --- |
+| SAG, BLSAG, MLSAG, CLSAG and serde | Native library tests and `serde_tests` sign, serialize, deserialize and verify. The four `test_*_no_std` tests exercise the algorithms on the host with standard-library features disabled. |
+| Keys and derivation | `test_scalar_byte_conversion`, `test_keypair_base58_conversion`, `test_keypair_debug_format`, `test_keypair_derivation` and `test_public_only_derivation` cover encodings, secret redaction and non-hardened child keys derived with or without a secret. |
+| Rings and lookup hashes | `decompress_roundtrip`, `add_public_key_keeps_ring_sorted`, `remove_public_key_removes_first_match` and `add_public_key_invalidates_prepared_ring` cover compressed/full representations, canonical member order and cached data. The empty and 64-byte BLAKE3 vectors in `ring_hash_vectors` check the default ring ID independently of the signing suite. |
+| Signing, verification and linkability | `golden_vector_deterministic_signature` compares challenge, responses and key image with frozen v3 values. `blsag_optimized_msm_cross_validation` compares generic and optimized calculations. `blsag_tests` covers per-signer linkability, fake signatures, prepared rings, single-use signing precomputation and modified inputs. |
+| Compact and archival BLSAG | `contextual_blsag_tests` exercises external ring lookup, embedded rings and digest-suite identity. `contextual_blsag_compact_legacy_payload_without_selected_hash_still_verifies` covers previously serialized signatures. |
+| Streaming and external RNG | `streaming_equivalence` verifies the stepwise and convenience APIs against the standard verifier, including 100-member rings. `test_ring_binding_512bit_deterministic`, `completed_state_erases_both_secrets_and_releases_digest`, `streaming_state_footprint_budget` and `streaming_success_and_poison_are_allocator_free` exercise transcript binding, terminal state, size and allocation contracts. |
+| Optional features and fallback | The native feature run enables BLAKE3, progress callbacks and SmallVec responses together. It exercises suite-specific hashes, prepared/streaming BLSAG, signed serde round trips, ring sizes on both sides of the 16-response inline capacity, and `blsag_progress_callback_fires_during_sign_and_verify`. A separate `std`-only build reruns the BLSAG vectors and streaming checks through the generic arithmetic path with the default feature set disabled. |
+| Embedded target | `test-no-std` checks the library and an external consumer on the Thumb target, including compile-time signer-size bounds. Another Thumb build enables BLAKE3, callbacks and SmallVec. Streaming and no-std behavioral assertions execute on the native host. |
+| Verification CPU-cost model | `verification_cost_model_test` and `verification_cost_model_update_test` check prediction, serialization and updates. The release `time_model` executable performs a calibration using real thread CPU time. Its coefficients describe the host running the gate. |
+| WebAssembly key API | `bounty-wasm-runtime` builds the current crate for WebAssembly and generates JS bindings. The same Node script checks that build and the tracked `pkg/` distribution separately, covering generated keys, byte/Base58 imports and exports, invalid inputs and the Ristretto basepoint for scalar one. |
+
+Physical hardware-key operation, on-device timing and browser integration require their respective devices or runtimes. A passing functional matrix also leaves cryptographic security proofs and comparative performance benchmarks as separate work.

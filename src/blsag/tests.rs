@@ -16,7 +16,6 @@ use curve25519_dalek::ristretto::VartimeRistrettoPrecomputation;
 use curve25519_dalek::scalar::Scalar;
 #[cfg(feature = "optimized-msm")]
 use curve25519_dalek::traits::VartimePrecomputedMultiscalarMul;
-use digest::Digest;
 use rand::rngs::OsRng;
 use sha2::Sha512;
 use sha3::Keccak512;
@@ -144,6 +143,7 @@ fn blsag_sign_rejects_mismatched_precomputed_ring() {
 #[cfg(feature = "optimized-msm")]
 #[test]
 fn blsag_optimized_msm_cross_validation() {
+    use digest::Digest;
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng;
 

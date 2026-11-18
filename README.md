@@ -32,6 +32,8 @@ The library includes comprehensive test suites for all features:
 
 All tests and compatibility checks are run automatically on pull requests and commits via GitHub Actions. The pre-commit hook also ensures all test suites pass before allowing commits.
 
+The [100-voter library test round](bounties/001/README.md) exercises a synthetic poll with a known answer and an encrypted test payload.
+
 # Documentation
 
 - API docs: [docs.rs/nazgul](https://docs.rs/nazgul/latest/nazgul/)

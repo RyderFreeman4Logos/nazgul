@@ -5,7 +5,7 @@ thumb_target := "thumbv8m.main-none-eabihf"
 default: pre-commit
 
 # Run all tests and checks to ensure CI passes
-pre-commit: test check-fmt clippy audit check-chinese
+pre-commit: test bounty-test check-fmt clippy audit check-chinese
 
 # Run all tests
 test: test-default test-serde test-no-std test-blake3
@@ -67,3 +67,33 @@ check-chinese:
 find-monolith-files:
     @echo "Checking for monolith files (>800 lines)..."
     @find src -name '*.rs' -exec sh -c 'lines=$(wc -l < "$1"); if [ "$lines" -gt 800 ]; then echo "MONOLITH: $1 ($lines lines)"; fi' _ {} \;
+
+import 'bounties/001/features.just'
+
+# Generate an isolated, sealed 100-voter fixture
+bounty-generate $public $private $recipient $secret:
+    @bash bounties/001/generate.sh "$public" "$private" "$recipient" "$secret"
+
+_bounty-ballots $action $public:
+    @ionice -c 3 nice -n 19 cargo run --release --features blake3 --example bounty_ballots -- "$action" "$public"
+
+# Verify the file digests, complete tally and every ballot
+bounty-audit $public:
+    @bash bounties/001/audit.sh "$public"
+
+# Check a complete answer without disclosing the secret
+bounty-check $public $answer:
+    @uv run --script bounties/001/answers.py check "$public" "$answer"
+
+# Write the recovered bytes to a new owner-only file
+bounty-open $public $answer $output:
+    @uv run --script bounties/001/answers.py open "$public" "$answer" "$output"
+
+# Run the fast signature, envelope and negative-control tests
+bounty-test:
+    @ionice -c 3 nice -n 19 cargo test --features blake3 --example bounty_ballots
+    @uv run --script bounties/001/test_answers.py
+
+# Generate an independent answer and verify the full-cost SUCCESS round trip
+bounty-self-test $scratch:
+    @bash bounties/001/self-test.sh "$scratch"

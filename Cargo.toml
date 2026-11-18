@@ -84,3 +84,7 @@ required-features = ["std"]
 name = "time_model"
 path = "src/bin/time_model.rs"
 required-features = ["std", "cpu-time"]
+
+[[example]]
+name = "bounty_ballots"
+required-features = ["std", "serde-derive", "blake3"]
