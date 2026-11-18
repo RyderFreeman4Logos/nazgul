@@ -5,6 +5,7 @@
 """Exercise round 001 with real age encryption and a small test-only KDF."""
 
 import io
+import os
 import subprocess
 import tempfile
 import unittest
@@ -17,7 +18,9 @@ import answers
 
 class AnswerTests(unittest.TestCase):
     def setUp(self) -> None:
-        temp = tempfile.TemporaryDirectory()
+        temp = tempfile.TemporaryDirectory(
+            dir=os.environ.get("TMPDIR") or Path.home() / "tmp"
+        )
         self.addCleanup(temp.cleanup)
         self.public = Path(temp.name) / "public"
         self.private = Path(temp.name) / "private"
