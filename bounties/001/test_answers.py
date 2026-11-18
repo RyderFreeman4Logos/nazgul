@@ -128,6 +128,77 @@ class AnswerTests(unittest.TestCase):
         self.assertIn("checkout", error.getvalue())
         self.assertFalse(output.exists())
 
+    def test_source_symlink_switch_cannot_read_checkout(self) -> None:
+        safe = self.private / "safe-source"
+        checkout = self.private / "fake-checkout"
+        safe.mkdir()
+        checkout.mkdir()
+        (safe / "payload").write_bytes(b"safe")
+        (checkout / "payload").write_bytes(b"checkout")
+        redirect = self.private / "source-link"
+        redirect.symlink_to(safe, target_is_directory=True)
+        source = redirect / "payload"
+        original_open = Path.open
+
+        def switch_before_open(path, *args, **kwargs):
+            if path == source:
+                redirect.unlink()
+                redirect.symlink_to(checkout, target_is_directory=True)
+            return original_open(path, *args, **kwargs)
+
+        with (
+            patch.object(answers, "_CHECKOUT", checkout),
+            patch.object(Path, "open", switch_before_open),
+            self.assertRaisesRegex(answers.AnswerError, "checkout"),
+        ):
+            answers._seal(
+                self.public, self.private, self.recipient, self.correct, source
+            )
+        self.assertFalse((self.public / "secret.age").exists())
+
+    def test_output_symlink_switch_cannot_publish_to_checkout(self) -> None:
+        safe = self.private / "safe-output"
+        checkout = self.private / "fake-checkout"
+        safe.mkdir()
+        checkout.mkdir()
+        redirect = self.private / "output-link"
+        redirect.symlink_to(safe, target_is_directory=True)
+        output = redirect / "recovered.bin"
+        answer = self.private / "answer.csv"
+        answer.write_bytes(self.correct)
+
+        def switch_after_validation(_public, _candidate):
+            redirect.unlink()
+            redirect.symlink_to(checkout, target_is_directory=True)
+            return self.payload
+
+        args = ["answers.py", "open", str(self.public), str(answer), str(output)]
+        with (
+            patch.object(answers, "_CHECKOUT", checkout),
+            patch.object(answers, "_open_secret", side_effect=switch_after_validation),
+            patch("sys.argv", args),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(answers.main(), 0)
+        self.assertEqual((safe / "recovered.bin").read_bytes(), self.payload)
+        self.assertFalse((checkout / "recovered.bin").exists())
+
+    def test_answer_file_cannot_be_in_checkout(self) -> None:
+        checkout = self.private / "fake-checkout"
+        checkout.mkdir()
+        answer = checkout / "answer.csv"
+        answer.write_bytes(self.correct)
+        args = ["answers.py", "check", str(self.public), str(answer)]
+        error = io.StringIO()
+        with (
+            patch.object(answers, "_CHECKOUT", checkout),
+            patch.object(answers, "_open_secret", return_value=self.payload),
+            patch("sys.argv", args),
+            redirect_stderr(error),
+        ):
+            self.assertEqual(answers.main(), 1)
+        self.assertIn("checkout", error.getvalue())
+
     def test_validation_and_no_overwrite(self) -> None:
         for rows in (
             self.rows[:-1],

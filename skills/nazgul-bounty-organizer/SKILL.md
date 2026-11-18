@@ -14,6 +14,6 @@ just bounty-generate PUBLIC_DIR PRIVATE_DIR AGE_RECIPIENT SECRET_FILE
 just bounty-audit PUBLIC_DIR
 ```
 
-Record the source commit with the fixture. Preserve `PRIVATE_DIR/challenge-answer.csv.age` and the organizer identity separately. The answer can be recovered using `age -d -i ORGANIZER_IDENTITY -o PRIVATE_ANSWER PRIVATE_DIR/challenge-answer.csv.age` inside an owner-only directory. Run `just bounty-open PUBLIC_DIR PRIVATE_ANSWER NEW_PRIVATE_OUTPUT` and compare the output with the original payload.
+Record the source commit with the fixture. Preserve `PRIVATE_DIR/challenge-answer.csv.age` and the organizer identity separately. The answer can be recovered using `age -d -i ORGANIZER_IDENTITY -o PRIVATE_ANSWER PRIVATE_DIR/challenge-answer.csv.age` inside an owner-only directory outside the checkout. Run `just bounty-open PUBLIC_DIR PRIVATE_ANSWER NEW_PRIVATE_OUTPUT` and compare the output with the original payload.
 
 Only the public directory is intended for sharing. The [feature matrix](../../bounties/001/COVERAGE.md) identifies the separate hardware, native and WASM checks.

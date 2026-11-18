@@ -47,6 +47,17 @@ def _read(path: Path, limit: int) -> bytes:
         return _bounded(source, limit)
 
 
+def _read_private(path: Path, limit: int, public: Path) -> bytes:
+    # Check the opened object, then read that same FD despite path changes.
+    with path.open("rb") as source:
+        actual = Path(f"/proc/self/fd/{source.fileno()}").resolve(strict=True)
+        if actual.is_relative_to(public) or actual.is_relative_to(_CHECKOUT):
+            raise AnswerError(
+                "Keep the answer and secret outside the public directory and checkout."
+            )
+        return _bounded(source, limit)
+
+
 def _rows(data: bytes) -> dict[str, str]:
     try:
         text = data.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
@@ -158,6 +169,28 @@ def _publish(path: Path, payload: bytes, rollback: ExitStack) -> None:
         rollback.callback(path.unlink)
 
 
+def _open_to(public: Path, candidate: bytes, output: Path) -> None:
+    if output.name in ("", ".", ".."):
+        raise AnswerError("Expected a new output file name.")
+    parent_fd = os.open(output.parent, os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        directory = Path(f"/proc/self/fd/{parent_fd}")
+        actual = directory.resolve(strict=True)
+        if actual.is_relative_to(public) or actual.is_relative_to(_CHECKOUT):
+            raise AnswerError(
+                "Write the plaintext outside the public directory and checkout."
+            )
+        target = directory / output.name
+        if os.path.lexists(target):
+            raise AnswerError("Output file already exists.")
+        secret = _open_secret(public, candidate)
+        with ExitStack() as rollback:
+            _publish(target, secret, rollback)
+            rollback.pop_all()
+    finally:
+        os.close(parent_fd)
+
+
 def _seal(
     public: Path, private: Path, organizer: str, candidate: bytes, secret_path: Path
 ) -> None:
@@ -173,12 +206,7 @@ def _seal(
     recipient = public / "recipient.txt"
     if any(os.path.lexists(path) for path in (backup, envelope, recipient)):
         raise AnswerError("A seal artifact already exists.")
-    source = secret_path.resolve(strict=True)
-    if source.is_relative_to(public) or source.is_relative_to(_CHECKOUT):
-        raise AnswerError(
-            "The source secret must be outside the public directory and checkout."
-        )
-    secret = _read(secret_path, _SECRET_LIMIT)
+    secret = _read_private(secret_path, _SECRET_LIMIT, public)
     if not secret:
         raise AnswerError("Secret must contain at least one byte.")
     canonical = _canonical(public, candidate)
@@ -221,28 +249,17 @@ def main() -> int:
             )
             print("Answer and secret sealed.")
         else:
+            public = args.public.resolve(strict=True)
             candidate = (
                 _bounded(sys.stdin.buffer, _LIMIT)
                 if args.answer == Path("-")
-                else _read(args.answer, _LIMIT)
+                else _read_private(args.answer, _LIMIT, public)
             )
             if args.command == "open":
-                output = args.output.resolve()
-                if output.is_relative_to(
-                    args.public.resolve()
-                ) or output.is_relative_to(_CHECKOUT):
-                    raise AnswerError(
-                        "Write the plaintext outside the public directory and checkout."
-                    )
-                if os.path.lexists(args.output):
-                    raise AnswerError("Output file already exists.")
-            secret = _open_secret(args.public, candidate)
-            if args.command == "open":
-                with ExitStack() as rollback:
-                    _publish(args.output, secret, rollback)
-                    rollback.pop_all()
+                _open_to(public, candidate, args.output)
                 print("Secret written.")
             else:
+                _open_secret(public, candidate)
                 print("Answer verified.")
     except (
         AnswerError,
