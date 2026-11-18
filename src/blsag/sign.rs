@@ -69,7 +69,7 @@ impl BLSAG {
             if d.ring_hash() != ring.canonical_hash_with::<H>() {
                 return Err(SignatureError::RingMismatch);
             }
-            if d.hashed_points().len() != n {
+            if !d.has_valid_points(ring) {
                 return Err(SignatureError::InvalidPrecomputedData);
             }
         }
@@ -227,7 +227,7 @@ impl BLSAG {
             if d.ring_hash() != ring.canonical_hash_with::<H>() {
                 return Err(SignatureError::RingMismatch);
             }
-            if d.hashed_points().len() != n {
+            if !d.has_valid_points(ring) {
                 return Err(SignatureError::InvalidPrecomputedData);
             }
         }
@@ -292,7 +292,7 @@ impl BLSAG {
             if d.ring_hash() != ring.canonical_hash_with::<H>() {
                 return Err(SignatureError::RingMismatch);
             }
-            if d.hashed_points().len() != n {
+            if !d.has_valid_points(ring) {
                 return Err(SignatureError::InvalidPrecomputedData);
             }
         }

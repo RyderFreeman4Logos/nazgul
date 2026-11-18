@@ -134,12 +134,17 @@ impl RingContext {
 /// the curve, along with the canonical [`RingHash`] of the ring it was computed
 /// from using the same digest `H`. The `ring_hash` is checked during signing and
 /// verification to ensure the prepared data matches the ring being used.
+/// Deserialized caches are fully checked before use. Recompute a cache from
+/// [`Ring::precompute`] to retain the fast path across repeated operations.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(bound(serialize = "", deserialize = "")))]
 pub struct PreparedRing<H> {
     ring_hash: RingHash,
     hashed_points: Vec<RistrettoPoint>,
+    // Serialized points have no trusted provenance until checked against the ring.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    locally_computed: bool,
     #[cfg_attr(feature = "serde", serde(skip))]
     _hash: PhantomData<H>,
 }
@@ -157,6 +162,10 @@ impl<H> PreparedRing<H> {
 }
 
 impl<H: Digest<OutputSize = U64> + Clone + Default> PreparedRing<H> {
+    pub(crate) fn has_valid_points(&self, ring: &Ring) -> bool {
+        self.hashed_points.len() == ring.len() && (self.locally_computed || self.verify(ring))
+    }
+
     /// Returns `true` if this prepared data was computed from the given ring.
     ///
     /// This is a fast O(1) check that compares the stored `ring_hash` against
@@ -431,6 +440,7 @@ impl Ring {
         PreparedRing {
             ring_hash: self.canonical_hash_with::<H>(),
             hashed_points,
+            locally_computed: true,
             _hash: PhantomData,
         }
     }

@@ -1,14 +1,19 @@
 use nazgul::blsag::BLSAG;
 use nazgul::error::SignatureError;
 use nazgul::keypair::KeyPair;
+#[cfg(feature = "serde-derive")]
+use nazgul::ring::PreparedRing;
 use nazgul::ring::Ring;
 use nazgul::traits::{LinkRef, SignRef, VerifyRef};
 
+use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use rand_core::{CryptoRng, OsRng, RngCore};
+#[cfg(feature = "serde-derive")]
+use sha2::Digest;
 use sha2::Sha512;
 
 // ==============
@@ -42,6 +47,90 @@ fn sign_and_verify_succeeds() {
     let signature = BLSAG::sign::<Sha512, OsRng>(signer_private_key, &ring, None, MESSAGE).unwrap();
 
     assert!(BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE));
+}
+
+#[test]
+fn empty_ring_cannot_verify_a_signature() {
+    let ring = Ring::new(Vec::new());
+    let signature = BLSAG::from_parts(Scalar::ONE, Vec::<Scalar>::new(), RISTRETTO_BASEPOINT_POINT);
+
+    assert!(!BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE));
+    assert!(!BLSAG::verify_streaming::<Sha512>(
+        &signature, &ring, MESSAGE
+    ));
+
+    #[cfg(feature = "progress-callback")]
+    assert!(!BLSAG::verify_with_progress::<Sha512>(
+        &signature,
+        &ring,
+        None,
+        MESSAGE,
+        |_, _| panic!("empty ring must not report verification progress"),
+    ));
+}
+
+#[cfg(feature = "serde-derive")]
+#[test]
+fn deserialized_precomputation_cannot_change_key_image_domain() {
+    let secret = Scalar::from(5u64);
+    let ring = Ring::new(vec![secret * RISTRETTO_BASEPOINT_POINT]);
+    let valid_precomputation = ring.precompute::<Sha512>();
+    let nonce = Scalar::from(9u64);
+
+    let forged_signature = |point: RistrettoPoint| {
+        let mut serialized = serde_json::to_value(&valid_precomputation).unwrap();
+        serialized["hashed_points"][0] = serde_json::to_value(point).unwrap();
+        serialized["locally_computed"] = serde_json::json!(true);
+        let precomputed: PreparedRing<Sha512> = serde_json::from_value(serialized).unwrap();
+        assert!(!precomputed.verify(&ring));
+
+        let challenge = Scalar::from_hash(
+            Sha512::new()
+                .chain_update(b"nazgul-chal-v3")
+                .chain_update(MESSAGE)
+                .chain_update((nonce * RISTRETTO_BASEPOINT_POINT).compress().as_bytes())
+                .chain_update((nonce * point).compress().as_bytes()),
+        );
+        let signature =
+            BLSAG::from_parts(challenge, vec![nonce - challenge * secret], secret * point);
+        assert!(!BLSAG::verify::<Sha512>(
+            &signature,
+            &ring,
+            Some(&precomputed),
+            MESSAGE,
+        ));
+        assert!(!BLSAG::verify::<Sha512>(&signature, &ring, None, MESSAGE));
+        signature
+    };
+
+    let first = forged_signature(RISTRETTO_BASEPOINT_POINT);
+    let second = forged_signature(Scalar::from(2u64) * RISTRETTO_BASEPOINT_POINT);
+    assert!(!BLSAG::link(&first, &second));
+}
+
+#[cfg(feature = "serde-derive")]
+#[test]
+fn valid_deserialized_precomputation_remains_usable() {
+    let secret = Scalar::from(5u64);
+    let ring = Ring::new(vec![secret * RISTRETTO_BASEPOINT_POINT]);
+    let encoded = serde_json::to_vec(&ring.precompute::<Sha512>()).unwrap();
+    let restored: PreparedRing<Sha512> = serde_json::from_slice(&encoded).unwrap();
+
+    let direct = BLSAG::sign::<Sha512, OsRng>(secret, &ring, Some(&restored), MESSAGE).unwrap();
+    assert!(BLSAG::verify::<Sha512>(
+        &direct,
+        &ring,
+        Some(&restored),
+        MESSAGE,
+    ));
+
+    let mut rng = OsRng;
+    let ticket =
+        BLSAG::precompute_signing::<Sha512, _>(secret, &ring, Some(&restored), &mut rng).unwrap();
+    let staged =
+        BLSAG::sign_precomputed::<Sha512>(ticket, &ring, Some(&restored), MESSAGE).unwrap();
+    assert!(BLSAG::verify::<Sha512>(&staged, &ring, None, MESSAGE));
+    assert!(BLSAG::link(&direct, &staged));
 }
 
 #[test]

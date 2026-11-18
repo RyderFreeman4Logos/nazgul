@@ -41,14 +41,14 @@ impl BLSAG {
         let ring_members = ring.members();
 
         let n = ring_members.len();
-        if signature.responses.len() != n {
+        if n == 0 || signature.responses.len() != n {
             return false;
         }
         if let Some(d) = precomputed_data {
             if d.ring_hash() != ring.canonical_hash_with::<H>() {
                 return false;
             }
-            if d.hashed_points().len() != n {
+            if !d.has_valid_points(ring) {
                 return false;
             }
         }
@@ -116,14 +116,14 @@ impl VerifyRef for BLSAG {
 
         // Length guards: never index untrusted inputs without validating sizes first.
         let n = ring_members.len();
-        if signature.responses.len() != n {
+        if n == 0 || signature.responses.len() != n {
             return false;
         }
         if let Some(d) = precomputed_data {
             if d.ring_hash() != ring.canonical_hash_with::<H>() {
                 return false;
             }
-            if d.hashed_points().len() != n {
+            if !d.has_valid_points(ring) {
                 return false;
             }
         }
