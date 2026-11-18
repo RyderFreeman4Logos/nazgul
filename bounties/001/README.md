@@ -10,7 +10,7 @@
 
 ## Run a known-answer test
 
-On Linux, install Rust, just, uv, age, age-keygen and GNU coreutils. Allow more than 4 GiB of available memory. From the repository root, run:
+On Linux, install Rust, just, Python 3.11 or newer, uv, age, age-keygen and GNU coreutils. Allow more than 4 GiB of available memory. Use an owner-only `$HOME/tmp` with owner- or root-controlled ancestors; set `TMPDIR` to that directory if needed. From the repository root, run:
 
 ```sh
 just bounty-test
@@ -19,6 +19,8 @@ just bounty-features
 ```
 
 Use an existing scratch directory outside the checkout. The self-test creates its own single-use organizer identity, a new random answer and a seven-byte `SUCCESS` file. It opens the sealed payload with the correct answer, compares all seven bytes, then rejects an incorrect answer with the same tally. The private temporary directory is removed when the test exits. The [coverage table](COVERAGE.md) lists the additional toolchain requirements and maps the feature checks to their evidence.
+
+Treat the published `SHA256SUMS` as the trusted commitment and keep its fixture unchanged between audit and answer checking. The auditor rejects links, non-regular files and oversized artifacts, then verifies a private snapshot. The answer checker validates the same bounded manifest before deriving the secret; a replaced manifest does not prove continuity with an earlier audit.
 
 ## What is verified
 

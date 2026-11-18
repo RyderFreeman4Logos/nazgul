@@ -20,6 +20,7 @@ from typing import BinaryIO
 from argon2.exceptions import HashingError
 from argon2.low_level import Type, hash_secret_raw
 from bech32 import bech32_encode, convertbits
+from fixture_files import FixtureError, read_public, require_safe_directory
 
 __all__ = ["AnswerError", "main"]
 
@@ -81,8 +82,8 @@ def _rows(data: bytes) -> dict[str, str]:
     return rows
 
 
-def _canonical(public: Path, candidate: bytes) -> bytes:
-    voters = _rows(_read(public / "voters.csv", _LIMIT))
+def _canonical(roster: bytes, candidate: bytes) -> bytes:
+    voters = _rows(roster)
     keys = list(voters.values())
     if (
         len(voters) != sum(_COUNTS.values())
@@ -148,9 +149,13 @@ def _decrypt(identity: bytes, ciphertext: bytes) -> bytes:
 
 
 def _open_secret(public: Path, candidate: bytes) -> bytes:
-    expected = _read(public / "recipient.txt", 128)
-    ciphertext = _read(public / "secret.age", _SECRET_LIMIT + 4096)
-    identity = _identity(_canonical(public, candidate))
+    try:
+        files = read_public(public)
+    except FixtureError as exc:
+        raise AnswerError(str(exc)) from exc
+    expected = files["recipient.txt"]
+    ciphertext = files["secret.age"]
+    identity = _identity(_canonical(files["voters.csv"], candidate))
     if not hmac.compare_digest(expected, _age(["age-keygen", "-y"], identity)):
         raise AnswerError("Answer does not match the published recipient.")
     secret = _decrypt(identity, ciphertext)
@@ -160,7 +165,7 @@ def _open_secret(public: Path, candidate: bytes) -> bytes:
 
 
 def _publish(path: Path, payload: bytes, rollback: ExitStack) -> None:
-    # A hard link exposes the complete file atomically and refuses an occupied name.
+    # The caller requires an owner-only directory; a hard link publishes atomically.
     with tempfile.NamedTemporaryFile(dir=path.parent) as staged:
         staged.write(payload)
         staged.flush()
@@ -180,6 +185,7 @@ def _open_to(public: Path, candidate: bytes, output: Path) -> None:
             raise AnswerError(
                 "Write the plaintext outside the public directory and checkout."
             )
+        require_safe_directory(actual, private=True)
         target = directory / output.name
         if os.path.lexists(target):
             raise AnswerError("Output file already exists.")
@@ -195,11 +201,11 @@ def _seal(
     public: Path, private: Path, organizer: str, candidate: bytes, secret_path: Path
 ) -> None:
     public, private = public.resolve(strict=True), private.resolve(strict=True)
-    if (
-        public.is_relative_to(private)
-        or private.is_relative_to(public)
-        or private.stat().st_mode & 0o077
-    ):
+    if public.is_relative_to(_CHECKOUT) or private.is_relative_to(_CHECKOUT):
+        raise AnswerError("Keep seal directories outside the checkout.")
+    require_safe_directory(public, private=True)
+    require_safe_directory(private, private=True)
+    if public.is_relative_to(private) or private.is_relative_to(public):
         raise AnswerError("Use separate public and owner-only private directories.")
     backup = private / "challenge-answer.csv.age"
     envelope = public / "secret.age"
@@ -209,7 +215,7 @@ def _seal(
     secret = _read_private(secret_path, _SECRET_LIMIT, public)
     if not secret:
         raise AnswerError("Secret must contain at least one byte.")
-    canonical = _canonical(public, candidate)
+    canonical = _canonical(_read(public / "voters.csv", _LIMIT), candidate)
     identity = _identity(canonical)
     target = _age(["age-keygen", "-y"], identity)
     ciphertext = _encrypt(target.decode("ascii").strip(), secret)
@@ -263,6 +269,7 @@ def main() -> int:
                 print("Answer verified.")
     except (
         AnswerError,
+        FixtureError,
         OSError,
         HashingError,
     ) as exc:

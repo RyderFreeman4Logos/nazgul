@@ -3,6 +3,7 @@ set -euo pipefail
 umask 077
 
 scratch=$(realpath -e -- "$1")
+python3 bounties/001/fixture_files.py private-dir "$scratch"
 case "$scratch/" in
     "$(git rev-parse --show-toplevel)/"*) echo "Choose a scratch directory outside the checkout." >&2; exit 1 ;;
 esac

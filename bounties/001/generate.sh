@@ -10,6 +10,7 @@ if [[ "$public/" == "$private/"* || "$private/" == "$public/"* ||
     exit 1
 fi
 test -f "$4" && test -r "$4" || { echo "A readable secret file is required." >&2; exit 1; }
+python3 bounties/001/fixture_files.py safe-parent "$(dirname -- "$public")" "$(dirname -- "$private")"
 mkdir -m 700 -- "$public" "$private"
 just _bounty-ballots generate "$public" |
     uv run --script bounties/001/answers.py seal "$public" "$private" "$3" "$4"

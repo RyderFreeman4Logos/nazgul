@@ -4,6 +4,7 @@
 # ///
 """Exercise round 001 with real age encryption and a small test-only KDF."""
 
+import hashlib
 import io
 import os
 import subprocess
@@ -24,7 +25,7 @@ class AnswerTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.public = Path(temp.name) / "public"
         self.private = Path(temp.name) / "private"
-        self.public.mkdir()
+        self.public.mkdir(mode=0o700)
         self.private.mkdir(mode=0o700)
         alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
         keys = sorted(
@@ -34,6 +35,7 @@ class AnswerTests(unittest.TestCase):
         (self.public / "voters.csv").write_text(
             "\n".join(f"{name},{key}" for name, key in zip(names, keys))
         )
+        (self.public / "ballots.jsonl").write_bytes(b"test ballot fixture\n")
         options = ["opt-like"] * 60 + ["opt-unlike"] * 20 + ["opt-abstain"] * 20
         self.rows = [f"{name},{option}" for name, option in zip(names, options)]
         self.correct = "\n".join(self.rows).encode()
@@ -53,6 +55,13 @@ class AnswerTests(unittest.TestCase):
         answers._seal(
             self.public, self.private, self.recipient, self.correct, self.secret
         )
+        names = ("voters.csv", "ballots.jsonl", "recipient.txt", "secret.age")
+        (self.public / "SHA256SUMS").write_text(
+            "".join(
+                f"{hashlib.sha256((self.public / name).read_bytes()).hexdigest()}  {name}\n"
+                for name in names
+            )
+        )
 
     def test_derived_recipient_matches_reference(self) -> None:
         # Generated with system libargon2 and OpenSSL X25519 at 1 MiB, one pass.
@@ -66,7 +75,13 @@ class AnswerTests(unittest.TestCase):
         self.seal()
         self.assertEqual(
             {p.name for p in self.public.iterdir()},
-            {"voters.csv", "secret.age", "recipient.txt"},
+            {
+                "voters.csv",
+                "ballots.jsonl",
+                "secret.age",
+                "recipient.txt",
+                "SHA256SUMS",
+            },
         )
         backup = (self.private / "challenge-answer.csv.age").read_bytes()
         self.assertEqual(answers._decrypt(self.owner, backup), self.correct)
@@ -159,7 +174,7 @@ class AnswerTests(unittest.TestCase):
     def test_output_symlink_switch_cannot_publish_to_checkout(self) -> None:
         safe = self.private / "safe-output"
         checkout = self.private / "fake-checkout"
-        safe.mkdir()
+        safe.mkdir(mode=0o700)
         checkout.mkdir()
         redirect = self.private / "output-link"
         redirect.symlink_to(safe, target_is_directory=True)
@@ -199,6 +214,37 @@ class AnswerTests(unittest.TestCase):
             self.assertEqual(answers.main(), 1)
         self.assertIn("checkout", error.getvalue())
 
+    def test_output_parent_must_be_owner_only(self) -> None:
+        self.seal()
+        shared = self.private / "shared"
+        shared.mkdir()
+        shared.chmod(0o777)
+        answer = self.private / "answer.csv"
+        answer.write_bytes(self.correct)
+        output = shared / "recovered.bin"
+        args = ["answers.py", "open", str(self.public), str(answer), str(output)]
+        error = io.StringIO()
+        with patch("sys.argv", args), redirect_stderr(error):
+            self.assertEqual(answers.main(), 1)
+        self.assertIn("owner-only", error.getvalue())
+        self.assertFalse(output.exists())
+
+    def test_public_changed_ciphertext_rejected(self) -> None:
+        self.seal()
+        secret = self.public / "secret.age"
+        recipient = (self.public / "recipient.txt").read_text().strip()
+        secret.write_bytes(answers._encrypt(recipient, b"SWAPPED"))
+        with self.assertRaisesRegex(answers.AnswerError, "SHA256SUMS"):
+            answers._open_secret(self.public, self.correct)
+
+    def test_public_symlink_rejected(self) -> None:
+        self.seal()
+        secret = self.public / "secret.age"
+        secret.unlink()
+        secret.symlink_to("/dev/zero")
+        with self.assertRaisesRegex(answers.AnswerError, "regular"):
+            answers._open_secret(self.public, self.correct)
+
     def test_validation_and_no_overwrite(self) -> None:
         for rows in (
             self.rows[:-1],
@@ -206,7 +252,9 @@ class AnswerTests(unittest.TestCase):
             [*self.rows[:-1], "Sample 99,opt-like"],
         ):
             with self.assertRaises(answers.AnswerError):
-                answers._canonical(self.public, "\n".join(rows).encode())
+                answers._canonical(
+                    (self.public / "voters.csv").read_bytes(), "\n".join(rows).encode()
+                )
         envelope = self.public / "secret.age"
         envelope.write_bytes(b"retain me")
         with self.assertRaises((FileExistsError, answers.AnswerError)):
