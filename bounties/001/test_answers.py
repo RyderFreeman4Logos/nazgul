@@ -130,6 +130,33 @@ class AnswerTests(unittest.TestCase):
                 checkout / "Cargo.toml",
             )
 
+    def test_private_input_rejects_shared_parent_and_file_symlink(self) -> None:
+        shared = self.private / "shared-source"
+        shared.mkdir(mode=0o777)
+        shared.chmod(0o777)
+        source = shared / "payload"
+        source.write_bytes(b"secret")
+        with self.assertRaisesRegex(answers.FixtureError, "owner-only"):
+            answers._read_private(source, answers._SECRET_LIMIT, self.public)
+
+        linked = self.private / "linked-payload"
+        linked.symlink_to(self.secret)
+        with self.assertRaises((answers.AnswerError, answers.FixtureError, OSError)):
+            answers._read_private(linked, answers._SECRET_LIMIT, self.public)
+
+        redirect = shared / "source-link"
+        redirect.symlink_to(self.private, target_is_directory=True)
+        with self.assertRaisesRegex(answers.FixtureError, "ancestry"):
+            answers._read_private(
+                redirect / self.secret.name, answers._SECRET_LIMIT, self.public
+            )
+
+    def test_private_input_fifo_rejected_without_waiting_for_writer(self) -> None:
+        fifo = self.private / "answer.pipe"
+        os.mkfifo(fifo)
+        with self.assertRaisesRegex(answers.FixtureError, "regular file"):
+            answers._read_private(fifo, answers._LIMIT, self.public)
+
     def test_checkout_output_rejected(self) -> None:
         checkout = Path(answers.__file__).resolve().parents[2]
         answer = self.private / "answer.csv"
@@ -146,14 +173,14 @@ class AnswerTests(unittest.TestCase):
     def test_source_symlink_switch_cannot_read_checkout(self) -> None:
         safe = self.private / "safe-source"
         checkout = self.private / "fake-checkout"
-        safe.mkdir()
-        checkout.mkdir()
+        safe.mkdir(mode=0o700)
+        checkout.mkdir(mode=0o700)
         (safe / "payload").write_bytes(b"safe")
         (checkout / "payload").write_bytes(b"checkout")
         redirect = self.private / "source-link"
         redirect.symlink_to(safe, target_is_directory=True)
         source = redirect / "payload"
-        original_open = Path.open
+        original_open = os.open
 
         def switch_before_open(path, *args, **kwargs):
             if path == source:
@@ -163,7 +190,7 @@ class AnswerTests(unittest.TestCase):
 
         with (
             patch.object(answers, "_CHECKOUT", checkout),
-            patch.object(Path, "open", switch_before_open),
+            patch.object(os, "open", switch_before_open),
             self.assertRaisesRegex(answers.AnswerError, "checkout"),
         ):
             answers._seal(

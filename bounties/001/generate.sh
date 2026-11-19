@@ -9,7 +9,7 @@ if [[ "$public/" == "$private/"* || "$private/" == "$public/"* ||
     echo "Use separate new public and private directories outside the checkout." >&2
     exit 1
 fi
-test -f "$4" && test -r "$4" || { echo "A readable secret file is required." >&2; exit 1; }
+python3 bounties/001/fixture_files.py private-file "$4"
 python3 bounties/001/fixture_files.py safe-parent "$(dirname -- "$public")" "$(dirname -- "$private")"
 mkdir -m 700 -- "$public" "$private"
 just _bounty-ballots generate "$public" |

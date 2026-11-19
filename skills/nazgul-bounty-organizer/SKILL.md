@@ -5,7 +5,7 @@ description: Prepare a local 100-voter Nazgul test draw, seal a supplied payload
 
 # Prepare the fixture
 
-Use the [round specification](../../bounties/001/README.md) and its original synthetic roster. Place the payload in a local file outside the checkout. For a smoke test, `just bounty-self-test SCRATCH` creates its own `SUCCESS` file and temporary organizer identity.
+Use the [round specification](../../bounties/001/README.md) and its original synthetic roster. Place the payload in a regular file owned by you inside an owner-only directory outside the checkout. File-level symbolic links and group/other-writable input files are rejected. For a smoke test, `just bounty-self-test SCRATCH` creates its own `SUCCESS` file and temporary organizer identity.
 
 For a retained test, choose a public age X25519 recipient whose identity the organizer holds. Supply two new, separate output directories outside the checkout, with existing owner-controlled parent directories:
 

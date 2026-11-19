@@ -20,7 +20,12 @@ from typing import BinaryIO
 from argon2.exceptions import HashingError
 from argon2.low_level import Type, hash_secret_raw
 from bech32 import bech32_encode, convertbits
-from fixture_files import FixtureError, read_public, require_safe_directory
+from fixture_files import (
+    FixtureError,
+    open_private,
+    read_public,
+    require_safe_directory,
+)
 
 __all__ = ["AnswerError", "main"]
 
@@ -50,8 +55,12 @@ def _read(path: Path, limit: int) -> bytes:
 
 def _read_private(path: Path, limit: int, public: Path) -> bytes:
     # Check the opened object, then read that same FD despite path changes.
-    with path.open("rb") as source:
-        actual = Path(f"/proc/self/fd/{source.fileno()}").resolve(strict=True)
+    initial = path.resolve(strict=True)
+    if initial.is_relative_to(public) or initial.is_relative_to(_CHECKOUT):
+        raise AnswerError(
+            "Keep the answer and secret outside the public directory and checkout."
+        )
+    with open_private(path) as (source, actual):
         if actual.is_relative_to(public) or actual.is_relative_to(_CHECKOUT):
             raise AnswerError(
                 "Keep the answer and secret outside the public directory and checkout."
@@ -177,6 +186,12 @@ def _publish(path: Path, payload: bytes, rollback: ExitStack) -> None:
 def _open_to(public: Path, candidate: bytes, output: Path) -> None:
     if output.name in ("", ".", ".."):
         raise AnswerError("Expected a new output file name.")
+    initial = output.parent.resolve(strict=True)
+    if initial.is_relative_to(public) or initial.is_relative_to(_CHECKOUT):
+        raise AnswerError(
+            "Write the plaintext outside the public directory and checkout."
+        )
+    require_safe_directory(output.parent, private=True)
     parent_fd = os.open(output.parent, os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
         directory = Path(f"/proc/self/fd/{parent_fd}")
