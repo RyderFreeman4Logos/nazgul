@@ -81,8 +81,22 @@ fn deserialized_precomputation_cannot_change_key_image_domain() {
         let mut serialized = serde_json::to_value(&valid_precomputation).unwrap();
         serialized["hashed_points"][0] = serde_json::to_value(point).unwrap();
         serialized["locally_computed"] = serde_json::json!(true);
+        let encoded = serde_json::to_vec(&serialized).unwrap();
         let precomputed: PreparedRing<Sha512> = serde_json::from_value(serialized).unwrap();
         assert!(!precomputed.verify(&ring));
+
+        let mut in_place = ring.precompute::<Sha512>();
+        let mut deserializer = serde_json::Deserializer::from_slice(&encoded);
+        <PreparedRing<Sha512> as serde::Deserialize>::deserialize_in_place(
+            &mut deserializer,
+            &mut in_place,
+        )
+        .unwrap();
+        assert!(!in_place.verify(&ring));
+        assert!(matches!(
+            BLSAG::sign_with_rng::<Sha512, _>(secret, &ring, Some(&in_place), MESSAGE, &mut OsRng,),
+            Err(SignatureError::InvalidPrecomputedData)
+        ));
 
         let mut rng = OsRng;
         assert!(matches!(

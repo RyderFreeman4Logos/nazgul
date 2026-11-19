@@ -137,8 +137,8 @@ impl RingContext {
 /// Deserialized caches are fully checked before use. Recompute a cache from
 /// [`Ring::precompute`] to retain the fast path across repeated operations.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(bound(serialize = "", deserialize = "")))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(bound(serialize = "")))]
 pub struct PreparedRing<H> {
     ring_hash: RingHash,
     hashed_points: Vec<RistrettoPoint>,
@@ -147,6 +147,27 @@ pub struct PreparedRing<H> {
     locally_computed: bool,
     #[cfg_attr(feature = "serde", serde(skip))]
     _hash: PhantomData<H>,
+}
+
+#[cfg(feature = "serde")]
+#[derive(serde::Deserialize)]
+#[serde(rename = "PreparedRing")]
+struct PreparedRingWire {
+    ring_hash: RingHash,
+    hashed_points: Vec<RistrettoPoint>,
+}
+
+#[cfg(feature = "serde")]
+impl<'de, H> serde::Deserialize<'de> for PreparedRing<H> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = <PreparedRingWire as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(Self {
+            ring_hash: wire.ring_hash,
+            hashed_points: wire.hashed_points,
+            locally_computed: false,
+            _hash: PhantomData,
+        })
+    }
 }
 
 impl<H> PreparedRing<H> {

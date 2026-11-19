@@ -78,7 +78,7 @@ use crate::traits::LinkRef;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use rand_core::{CryptoRng, RngCore};
-#[cfg(feature = "serde-derive")]
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 /// Response vector type: uses `SmallVec<[Scalar; 16]>` when the `smallvec-responses`

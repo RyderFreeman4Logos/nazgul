@@ -8,7 +8,7 @@ default: pre-commit
 pre-commit: test bounty-test check-fmt clippy audit check-chinese
 
 # Run all tests
-test: test-default test-serde test-no-std test-blake3
+test: test-default test-serde test-serde-minimal test-no-std test-blake3
 
 # Run default feature tests
 test-default:
@@ -17,6 +17,9 @@ test-default:
 # Run serde tests
 test-serde:
     cargo test --features serde-derive --verbose
+
+test-serde-minimal:
+    cargo check --no-default-features --features serde --lib
 
 # Run blake3 feature tests
 test-blake3:
